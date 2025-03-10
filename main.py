@@ -4,6 +4,10 @@ from routes import (
     account_router,
     movie_router,
 )
+from database.session_sqlite import engine
+from database.models.movies import Base, MovieModel
+
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="Movies homework",
