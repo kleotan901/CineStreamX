@@ -1,4 +1,6 @@
 import logging
+from datetime import timezone, datetime
+from http.cookiejar import debug
 from unittest.mock import patch
 
 import pytest
@@ -6,6 +8,7 @@ from httpx import AsyncClient, ASGITransport
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
+from crud import create_user
 from database import ActivationTokenModel, SessionLocal, UserModel
 from main import app
 
@@ -24,16 +27,20 @@ async def test_read_main():
 
 
 @pytest.mark.asyncio
-async def test_register_user_success():
-    payload = {"email": "EmailTest@example.com", "password": "StrongPassword123!"}
-
+async def test_register_user_success(db_session):
+    payload = {"email": "emailtest@example.com", "password": "StrongPassword123!"}
     response = await async_client.post("accounts/register/", json=payload)
     response_data = response.json()
     assert (
-        response_data["email"] == "emailtest@example.com"
+            response_data["email"] == "emailtest@example.com"
     ), "Returned email does not match."
     assert "id" in response_data, "Response does not contain user ID."
     assert response.status_code == 201, "Expected status code 201 Created."
+
+    stmt_user = select(UserModel).where(UserModel.email == payload["email"])
+    result = await db_session.execute(stmt_user)
+    created_user = result.scalars().first()
+    assert created_user.is_active is False, "Newly created user ia not active"
 
 
 @pytest.mark.asyncio
@@ -53,7 +60,7 @@ async def test_register_user_failed_duplicate():
     expected_message = f"A user with this email {payload['email']} already exists."
     response_data = second_response.json()
     assert (
-        response_data["detail"] == expected_message
+            response_data["detail"] == expected_message
     ), f"Expected error message: {expected_message}"
 
 
@@ -66,8 +73,8 @@ async def test_register_user_failed_duplicate():
         ("nodigitnorupper@", "Password must contain at least one uppercase letter."),
         ("NOLOWERCASE1@", "Password must contain at least one lower letter."),
         (
-            "NoSpecial123",
-            "Password must contain at least one special character: @, $, !, %, *, ?, #, &.",
+                "NoSpecial123",
+                "Password must contain at least one special character: @, $, !, %, *, ?, #, &.",
         ),
     ],
 )
@@ -81,7 +88,6 @@ async def test_register_user_password_validation(invalid_password, expected_erro
         expected_error (str): The expected error message substring.
     """
     payload = {"email": "testuser@example.com", "password": invalid_password}
-
     response = await async_client.post("accounts/register/", json=payload)
     assert response.status_code == 422, "Expected status code 422 for invalid input."
 
@@ -108,13 +114,13 @@ async def test_register_user_internal_server_error():
         response = await async_client.post("accounts/register/", json=payload)
 
         assert (
-            response.status_code == 500
+                response.status_code == 500
         ), "Expected status code 500 for internal server error."
 
         response_data = response.json()
         expected_message = "An error occurred during user creation."
         assert (
-            response_data["detail"] == expected_message
+                response_data["detail"] == expected_message
         ), f"Expected error message: {expected_message}"
 
 
@@ -123,7 +129,6 @@ async def test_activation_token_created(db_session):
     """
     Test activation token was created and saved in DB.
     """
-
     payload = {"email": "test@example.com", "password": "StrongPassword123!"}
     response = await async_client.post("accounts/register/", json=payload)
     assert response.status_code == 201, "Expected status code 201 Created."
@@ -141,3 +146,106 @@ async def test_activation_token_created(db_session):
     assert activation_token.user_id == created_user.id, "Activation token and user id does not match."
     assert activation_token is not None, "Activation token is not None."
     assert activation_token.token is not None, "Activation token has no token value."
+
+
+@pytest.mark.asyncio
+async def test_request_activation_token_success(db_session):
+    payload = {"email": "test@example.com", "password": "StrongPassword123!"}
+    registration_response = await async_client.post("accounts/register/", json=payload)
+    assert registration_response.status_code == 201, "Expected status code 201 Created."
+
+    stmt_user = select(UserModel).where(UserModel.email == payload["email"])
+    result = await db_session.execute(stmt_user)
+    user = result.scalars().first()
+
+    response_token = await async_client.post(
+        "accounts/activate/",
+        json={"email": user.email}
+    )
+
+    stmt_activation_token = select(ActivationTokenModel).where(ActivationTokenModel.user_id == user.id)
+    result = await db_session.execute(stmt_activation_token)
+    activation_token = result.scalars().first()
+
+    assert activation_token.user_id == user.id, "Activation token and user id does not match."
+    assert activation_token is not None, "Activation token is not None."
+    assert activation_token.token is not None, "Activation token has no token value."
+
+    expires_at = activation_token.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    assert expires_at > datetime.now(timezone.utc), "Activation token is already expired."
+
+    assert response_token.status_code == 200, "Expected status code 200 Ok."
+    response_data = response_token.json()
+    expected_message = "If you are registered, you will receive an email with instructions."
+    assert (
+            response_data["message"] == expected_message
+    ), f"Expected message: {expected_message}"
+
+
+@pytest.mark.asyncio
+async def test_request_activation_token_but_account_already_active(db_session):
+    payload = {"email": "test@example.com", "password": "StrongPassword123!"}
+    registration_response = await async_client.post("accounts/register/", json=payload)
+    assert registration_response.status_code == 201, "Expected status code 201 Created."
+
+    stmt_user = select(UserModel).where(UserModel.email == payload["email"])
+    result = await db_session.execute(stmt_user)
+    user = result.scalars().first()
+    user.is_active = True
+    await db_session.commit()
+
+    response = await async_client.post(
+        "accounts/activate/",
+        json={"email": user.email}
+    )
+    assert response.status_code == 400, "Expected status code 400 Bad request."
+    response_data = response.json()
+    expected_message = "Account is already active."
+    assert (
+            response_data["detail"] == expected_message
+    ), f"Expected error message: {expected_message}"
+
+
+@pytest.mark.asyncio
+async def test_wrong_email_while_requesting_activation_token(db_session):
+    response = await async_client.post(
+        "accounts/activate/",
+        json={"email": "wrongemail@example.com"}
+    )
+    assert response.status_code == 404, "Expected status code 404 Not found."
+    response_data = response.json()
+    expected_message = "A user with this email not found."
+    assert (
+            response_data["detail"] == expected_message
+    ), f"Expected error message: {expected_message}"
+
+
+@pytest.mark.asyncio
+async def test_activation_complete_success(db_session):
+    payload = {"email": "test@example.com", "password": "StrongPassword123!"}
+    registration_response = await async_client.post("accounts/register/", json=payload)
+    assert registration_response.status_code == 201, "Expected status code 201 Created."
+
+    stmt_user = select(UserModel).where(UserModel.email == payload["email"])
+    result = await db_session.execute(stmt_user)
+    user = result.scalars().first()
+
+    stmt_activation_token = select(ActivationTokenModel).where(ActivationTokenModel.user_id == user.id)
+    result = await db_session.execute(stmt_activation_token)
+    activation_token = result.scalars().first()
+
+    response_token = await async_client.post(
+        "accounts/activate-complete/",
+        json={"email": user.email, "token": activation_token.token}
+    )
+
+    response_data = response_token.json()
+    assert response_data["message"] == "Account was successfully activated!"
+
+    stmt = select(ActivationTokenModel).where(ActivationTokenModel.user_id == user.id)
+    result = await db_session.execute(stmt)
+    empty_activation_token = result.scalars().first()
+    assert empty_activation_token is None, "Activation token should be removed after success activation."
