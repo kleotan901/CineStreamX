@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
+
 from routes import (
     account_router,
     movie_router,
@@ -15,3 +16,4 @@ app.include_router(
 app.include_router(
     movie_router, prefix=f"{api_version_prefix}/theater", tags=["theater"]
 )
+
