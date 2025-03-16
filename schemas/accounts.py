@@ -42,11 +42,36 @@ class MessageResponseSchema(BaseModel):
     message: str
 
 
-class UserLoginRequestSchema(UserRegistrationRequestSchema):
-    pass
+class UserLoginRequestSchema(UserBase):
+    password: str
+
+    model_config = {"from_attributes": True}
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value):
+        return value.lower()
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value):
+        return validate_password_strength(value)
 
 
 class UserLoginResponseSchema(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+
+
+class TokenRefreshRequestSchema(BaseModel):
+    refresh_token: str
+
+
+class TokenRefreshResponseSchema(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+class UserLogoutRequestSchema(TokenRefreshRequestSchema):
+    pass

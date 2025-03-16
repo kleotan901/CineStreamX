@@ -6,7 +6,12 @@ from routes import (
     movie_router,
 )
 
-app = FastAPI(title="Movies homework", description="Description of project")
+app = FastAPI(
+    title="CineStreamX API",
+    description="An online cinema FastAPI project is a digital platform that allows users"
+                " to select, watch, and purchase access to movies "
+                "and other video materials via the internet."
+)
 
 api_version_prefix = "/api/v1"
 

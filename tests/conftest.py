@@ -1,5 +1,7 @@
 import pytest
 import pytest_asyncio
+
+from config.dependencies import get_settings
 from database import (
     SessionLocal,
     engine,
@@ -7,6 +9,8 @@ from database import (
     Base,
     get_sqlite_db_contextmanager,
 )
+from security.interfaces import JWTAuthManagerInterface
+from security.token_manager import JWTAuthManager
 
 
 @pytest_asyncio.fixture(scope="function", autouse=True)
@@ -42,3 +46,24 @@ async def db_session():
     """
     async with get_sqlite_db_contextmanager() as session:
         yield session
+
+
+@pytest_asyncio.fixture(scope="function")
+async def jwt_manager() -> JWTAuthManagerInterface:
+    """
+    Asynchronous fixture to create a JWT authentication manager instance.
+
+    This fixture retrieves the application settings via `get_settings()` and uses them to
+    instantiate a `JWTAuthManager`. The manager is configured with the secret keys for
+    access and refresh tokens, as well as the JWT signing algorithm specified in the settings.
+
+    Returns:
+        JWTAuthManagerInterface: An instance of JWTAuthManager configured with the appropriate
+        secret keys and algorithm.
+    """
+    settings = get_settings()
+    return JWTAuthManager(
+        secret_key_access=settings.SECRET_KEY_ACCESS,
+        secret_key_refresh=settings.SECRET_KEY_REFRESH,
+        algorithm=settings.JWT_SIGNING_ALGORITHM,
+    )
