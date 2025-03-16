@@ -1,6 +1,6 @@
 import logging
+from colorsys import rgb_to_hls
 from datetime import timezone, datetime
-from http.cookiejar import debug
 from unittest.mock import patch
 
 import pytest
@@ -8,8 +8,7 @@ from httpx import AsyncClient, ASGITransport
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
-from crud import create_user
-from database import ActivationTokenModel, SessionLocal, UserModel
+from database import ActivationTokenModel, SessionLocal, UserModel, RefreshTokenModel, UserGroupEnum, UserGroupModel
 from main import app
 
 logging.basicConfig(level=logging.DEBUG)
@@ -24,6 +23,32 @@ async def test_read_main():
     response = await async_client.get("theater/")
     assert response.status_code == 200
     assert response.json() == {"message": "Hello, CineStreamX!"}
+
+
+@pytest.mark.asyncio
+async def register_user(
+        db_session: SessionLocal,
+        email: str = "test@email.com",
+        password: str = "StrongPassword123!"
+):
+    await async_client.post("accounts/register/", json={"email": email, "password": password})
+    stmt_user = select(UserModel).where(UserModel.email == email)
+    result = await db_session.execute(stmt_user)
+    user = result.scalars().first()
+    return user
+
+
+@pytest.mark.asyncio
+async def get_user_group(db_session):
+    stmt = select(UserGroupModel).where(UserGroupModel.name == UserGroupEnum.USER)
+    result = await db_session.execute(stmt)
+    user_group = result.scalars().first()
+
+    if user_group is None:
+        user_group = UserGroupModel(name=UserGroupEnum.USER)
+        db_session.add(user_group)
+        await db_session.commit()
+    return user_group
 
 
 @pytest.mark.asyncio
@@ -249,3 +274,118 @@ async def test_activation_complete_success(db_session):
     result = await db_session.execute(stmt)
     empty_activation_token = result.scalars().first()
     assert empty_activation_token is None, "Activation token should be removed after success activation."
+
+
+@pytest.mark.asyncio
+async def test_login_success(db_session):
+    """Test user login with registered credentials."""
+    email = "test@example.com"
+    password = "StrongPassword123!"
+
+    user = await register_user(db_session, email, password)
+
+    user.is_active = True
+    await db_session.commit()
+
+    login_response = await async_client.post(
+        "accounts/login/",
+        json={"email": email, "password": password}
+    )
+
+    stmt = select(RefreshTokenModel).where(RefreshTokenModel.user_id == user.id)
+    result = await db_session.execute(stmt)
+    jwt_refresh_token = result.scalars().first()
+    assert jwt_refresh_token.token is not None, "Refresh token has no token value."
+
+    response_data = login_response.json()
+    assert login_response.status_code == 201, "Expected status code 201 Created."
+    assert "access_token" in response_data
+    assert "refresh_token" in response_data
+    assert response_data["token_type"] == "bearer"
+
+
+@pytest.mark.asyncio
+async def test_login_account_is_not_active(db_session):
+    """Test user login with registered credentials, account is not active."""
+    email = "test@example.com"
+    password = "StrongPassword123!"
+    await register_user(db_session, email, password)
+
+    login_response = await async_client.post(
+        "accounts/login/",
+        json={"email": email, "password": password}
+    )
+    response_data = login_response.json()
+    expected_error = "User account is not activated."
+    assert login_response.status_code == 403, "User is not active, expected status 403 Forbidden."
+    assert response_data["detail"] == expected_error
+
+
+@pytest.mark.asyncio
+async def test_login_user_invalid_cases(db_session):
+    """
+    Test login with invalid cases:
+    1. Non-existent user.
+    2. Incorrect password for an existing user.
+    """
+    login_payload = {
+        "email": "nonexistent@example.com",
+        "password": "SomePassword123!"
+    }
+    response = await async_client.post(
+        "accounts/login/",
+        json=login_payload
+    )
+    assert response.status_code == 401, "Expected status code 401 for non-existent user."
+    assert response.json()["detail"] == "Invalid email or password.", \
+        "Unexpected error message for non-existent user."
+
+    user = await register_user(db_session)
+
+    login_payload_incorrect_password = {
+        "email": user.email,
+        "password": "WrongPassword123!"
+    }
+    response = await async_client.post(
+        "accounts/login/",
+        json=login_payload_incorrect_password
+    )
+    assert response.status_code == 401, "Expected status code 401 for incorrect password."
+    assert response.json()["detail"] == "Invalid email or password.", \
+        "Unexpected error message for incorrect password."
+
+
+@pytest.mark.asyncio
+async def test_login_user_commit_error(db_session):
+    """
+    Test login when a database commit error occurs.
+    Validates that the endpoint returns a 500 status code and an appropriate error message.
+    """
+    user_payload = {
+        "email": "testuser@example.com",
+        "password": "StrongPassword123!"
+    }
+    user_group = await get_user_group(db_session)
+    assert user_group is not None, "Default user group should exist."
+
+    user = UserModel.create(
+        email=user_payload["email"],
+        raw_password=user_payload["password"],
+        group_id=user_group.id
+    )
+    user.is_active = True
+    db_session.add(user)
+    await db_session.commit()
+
+    login_payload = {
+        "email": user_payload["email"],
+        "password": user_payload["password"]
+    }
+
+    with patch("routes.accounts.AsyncSession.commit", side_effect=SQLAlchemyError):
+        response = await async_client.post("accounts/login/", json=login_payload)
+
+    assert response.status_code == 500, "Expected status code 500 for database commit error."
+    assert response.json()["detail"] == "An error occurred while processing the request.", (
+        "Unexpected error message for database commit error."
+    )

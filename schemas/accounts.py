@@ -37,5 +37,16 @@ class ActivationAccountCompleteSchema(UserBase):
     token: str
     model_config = {"from_attributes": True}
 
+
 class MessageResponseSchema(BaseModel):
     message: str
+
+
+class UserLoginRequestSchema(UserRegistrationRequestSchema):
+    pass
+
+
+class UserLoginResponseSchema(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
