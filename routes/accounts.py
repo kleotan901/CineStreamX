@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,7 +25,7 @@ from database import (
     PasswordResetTokenModel,
     RefreshTokenModel,
 )
-from exceptions.security import BaseSecurityError
+from exceptions.security import BaseSecurityError, InvalidTokenError, TokenExpiredError
 
 from schemas import (
     UserRegistrationRequestSchema,
@@ -38,6 +38,9 @@ from schemas import (
     TokenRefreshRequestSchema,
     TokenRefreshResponseSchema,
     UserLogoutRequestSchema,
+    UserChangePasswordRequestSchema,
+    PasswordResetRequestSchema,
+    PasswordResetCompleteRequestSchema,
 )
 from security.interfaces import JWTAuthManagerInterface
 
@@ -474,3 +477,242 @@ async def refresh_access_token(
     new_access_token = jwt_manager.create_access_token({"user_id": user_id})
 
     return TokenRefreshResponseSchema(access_token=new_access_token)
+
+
+@router.post(
+    path="/change-password/",
+    response_model=MessageResponseSchema,
+    summary="Change password",
+    description="Users can change their password if they remember the old one "
+    "by entering the old password and a new password.",
+    status_code=status.HTTP_200_OK,
+    responses={
+        400: {
+            "description": "Bad Request - The provided access token is invalid or expired.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Token is invalid or expired."}
+                }
+            },
+        },
+        401: {
+            "description": "Unauthorized - Password or email is invalid.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Invalid email or old password."}
+                }
+            },
+        },
+        500: {
+            "description": "Internal Server Error - An error occurred during user creation.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "An error occurred during user creation."}
+                }
+            },
+        },
+    },
+)
+async def change_password(
+    user_data: UserChangePasswordRequestSchema,
+    db: AsyncSession = Depends(get_db),
+    jwt_manager: JWTAuthManagerInterface = Depends(get_jwt_auth_manager),
+) -> MessageResponseSchema:
+    db_user = await get_user_by_email(user_data.email, db)
+    if not db_user or not db_user.verify_password(user_data.old_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid provided email or password.",
+        )
+
+    try:
+        decode_access_token = jwt_manager.decode_access_token(
+            token=user_data.access_token
+        )
+        if decode_access_token["user_id"] != db_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid access token."
+            )
+    except TokenExpiredError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Token has expired."
+        )
+    except InvalidTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid access token."
+        )
+
+    try:
+        db_user.password = user_data.new_password
+        await db.commit()
+    except SQLAlchemyError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while resetting the password.",
+        )
+
+    return MessageResponseSchema(message="Password was changed successfully.")
+
+
+@router.post(
+    "/password-reset/request/",
+    response_model=MessageResponseSchema,
+    summary="Request Password Reset Token",
+    description=(
+        "Allows a user to request a password reset token. If the user exists and is active, "
+        "a new token will be generated and any existing tokens will be invalidated."
+    ),
+    status_code=status.HTTP_200_OK,
+)
+async def request_password_reset_token(
+    data: PasswordResetRequestSchema,
+    db: AsyncSession = Depends(get_db),
+) -> MessageResponseSchema:
+    """
+    Endpoint to request a password reset token.
+    If the user exists and is active, invalidates any existing password reset tokens and generates a new one.
+    Always responds with a success message to avoid leaking user information.
+    Args:
+        data (PasswordResetRequestSchema): The request data containing the user's email.
+        db (AsyncSession): The asynchronous database session.
+        email_sender (EmailSenderInterface): The asynchronous email sender.
+    Returns:
+        MessageResponseSchema: A success message indicating that instructions will be sent.
+    """
+    user = await get_user_by_email(data.email, db)
+    if not user or not user.is_active:
+        return MessageResponseSchema(
+            message="If you are registered, you will receive an email with instructions."
+        )
+
+    await db.execute(
+        delete(PasswordResetTokenModel).where(
+            PasswordResetTokenModel.user_id == user.id
+        )
+    )
+
+    reset_token = PasswordResetTokenModel(user_id=cast(int, user.id))
+    db.add(reset_token)
+    await db.commit()
+
+    password_reset_complete_link = f"{BASE_URL}/password-reset-complete/"
+
+    # TODO email_sender
+    # await email_sender.send_password_reset_email(
+    #    str(data.email),
+    #    password_reset_complete_link
+    # )
+
+    return MessageResponseSchema(
+        message="If you are registered, you will receive an email with instructions."
+    )
+
+
+@router.post(
+    "/reset-password/complete/",
+    response_model=MessageResponseSchema,
+    summary="Reset User Password",
+    description="Reset a user's password if a valid token is provided.",
+    status_code=status.HTTP_200_OK,
+    responses={
+        400: {
+            "description": (
+                "Bad Request - The provided email or token is invalid, "
+                "the token has expired, or the user account is not active."
+            ),
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "invalid_email_or_token": {
+                            "summary": "Invalid Email or Token",
+                            "value": {"detail": "Invalid email or token."},
+                        },
+                        "expired_token": {
+                            "summary": "Expired Token",
+                            "value": {"detail": "Invalid email or token."},
+                        },
+                    }
+                }
+            },
+        },
+        500: {
+            "description": "Internal Server Error - An error occurred while resetting the password.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "An error occurred while resetting the password."
+                    }
+                }
+            },
+        },
+    },
+)
+async def reset_password(
+    data: PasswordResetCompleteRequestSchema,
+    db: AsyncSession = Depends(get_db),
+) -> MessageResponseSchema:
+    """
+    Endpoint for resetting a user's password.
+    Validates the token and updates the user's password if the token is valid and not expired.
+    Deletes the token after a successful password reset.
+    Args:
+        data (PasswordResetCompleteRequestSchema): The request data containing the user's email,
+         token, and new password.
+        db (AsyncSession): The asynchronous database session.
+        email_sender (EmailSenderInterface): The asynchronous email sender.
+
+    Returns:
+        MessageResponseSchema: A response message indicating successful password reset.
+
+    Raises:
+        HTTPException:
+            - 400 Bad Request if the email or token is invalid, or the token has expired.
+            - 500 Internal Server Error if an error occurs during the password reset process.
+    """
+    user = await get_user_by_email(data.email, db)
+    if not user or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid email or token."
+        )
+
+    stmt = select(PasswordResetTokenModel).filter_by(user_id=user.id)
+    result = await db.execute(stmt)
+    token_record = result.scalars().first()
+
+    if not token_record or token_record.token != data.token:
+        if token_record:
+            await db.run_sync(lambda s: s.delete(token_record))
+            await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid email or token."
+        )
+
+    expires_at = cast(datetime, token_record.expires_at).replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
+        await db.run_sync(lambda s: s.delete(token_record))
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid email or token."
+        )
+
+    try:
+        user.password = data.password
+        await db.run_sync(lambda s: s.delete(token_record))
+        await db.commit()
+    except SQLAlchemyError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while resetting the password.",
+        )
+
+    login_link = f"{BASE_URL}/accounts/login/"
+
+    # TODO email_sender
+    # await email_sender.send_password_reset_complete_email(
+    #   str(data.email),
+    # login_link
+    # )
+
+    return MessageResponseSchema(message="Password reset successfully.")

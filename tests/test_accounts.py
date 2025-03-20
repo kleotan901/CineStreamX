@@ -1,5 +1,4 @@
 import logging
-from colorsys import rgb_to_hls
 from datetime import timezone, datetime, timedelta
 from unittest.mock import patch
 
@@ -45,6 +44,22 @@ async def register_user(
     result = await db_session.execute(stmt_user)
     user = result.scalars().first()
     return user
+
+
+@pytest.mark.asyncio
+async def login_user(
+    db_session: SessionLocal,
+    email: str = "test@email.com",
+    password: str = "StrongPassword123!",
+):
+    user = await register_user(db_session=db_session, email=email, password=password)
+    user.is_active = True
+    db_session.add(user)
+    await db_session.commit()
+
+    login_payload = {"email": email, "password": password}
+    login_response = await async_client.post("accounts/login/", json=login_payload)
+    return login_response
 
 
 @pytest.mark.asyncio
@@ -546,33 +561,25 @@ async def test_logout_success(db_session, jwt_manager):
 
     Check if provided refresh token is valid.
     Steps:
-    - Create an active user in the database.
     - Log in the user to obtain a refresh token.
     - Use the refresh token to logout.
     - Remove the refresh token from DB
     """
-    user = await register_user(db_session)
-    user.is_active = True
-    db_session.add(user)
-    await db_session.commit()
-
-    login_payload = {"email": "test@email.com", "password": "StrongPassword123!"}
-    login_response = await async_client.post("accounts/login/", json=login_payload)
+    login_response = await login_user(db_session=db_session)
     assert (
         login_response.status_code == 201
     ), "Expected status code 201 for successful login."
 
-    refresh_token = jwt_manager.create_refresh_token({"user_id": user.id})
-
     logout_response = await async_client.post(
-        "accounts/logout/", json={"refresh_token": refresh_token}
+        "accounts/logout/",
+        json={"refresh_token": login_response.json()["refresh_token"]},
     )
 
     logout_data = logout_response.json()
     assert logout_response.status_code == 200, "Expected status code 200 Ok."
     assert logout_data["message"] == "User logged out!", "Logged out message."
 
-    stmt = select(RefreshTokenModel).where(RefreshTokenModel.user_id == user.id)
+    stmt = select(RefreshTokenModel).where(RefreshTokenModel.user_id == 1)
     result = await db_session.execute(stmt)
     deleted_token = result.scalars().first()
     # Remove refresh token from DB
@@ -580,3 +587,152 @@ async def test_logout_success(db_session, jwt_manager):
     await db_session.commit()
 
     assert deleted_token is None, "No refresh token in DB for user."
+
+
+@pytest.mark.asyncio
+async def test_change_password_success(db_session, jwt_manager):
+    """
+    Test successful change password by entering the old password and a new password.
+    Steps:
+    - Create an active user in the database.
+    - Log in the user to obtain a access token.
+    - Enter the old password and a new password.
+    """
+    login_response = await login_user(db_session=db_session, password="OldPassword123!")
+    assert (
+        login_response.status_code == 201
+    ), "Expected status code 201 for successful login."
+
+    change_password_payload = {
+        "email": "test@email.com",
+        "old_password": "OldPassword123!",
+        "new_password": "NewPassword123!",
+        "access_token": login_response.json()["access_token"],
+    }
+    change_password_response = await async_client.post(
+        "accounts/change-password/", json=change_password_payload
+    )
+    expected_msg = "Password was changed successfully."
+    assert (
+        change_password_response.status_code == 200
+    ), "Expected status code 200 for successful login."
+    assert (
+        change_password_response.json()["message"] == expected_msg
+    ), f"Expected message {expected_msg}."
+
+
+@pytest.mark.asyncio
+async def test_change_password_expired_access_token(db_session, jwt_manager):
+    """
+    Test errors raise while changing the password.
+    Check if access token expired.
+    """
+
+    login_response = await login_user(db_session=db_session, password="OldPassword123!")
+    assert (
+        login_response.status_code == 201
+    ), "Expected status code 201 for successful login."
+
+    expired_access_token = jwt_manager.create_access_token(
+        {"user_id": 1}, expires_delta=timedelta(days=-1)
+    )
+
+    change_password_payload = {
+        "email": "test@email.com",
+        "old_password": "OldPassword123!",
+        "new_password": "NewPassword123!",
+        "access_token": expired_access_token,
+    }
+    change_password_response = await async_client.post(
+        "accounts/change-password/", json=change_password_payload
+    )
+    expected_error = "Token has expired."
+    assert (
+        change_password_response.status_code == 400
+    ), "Expected status code 400 for Bad request."
+    assert (
+        change_password_response.json()["detail"] == expected_error
+    ), f"Expected error: {expected_error}."
+
+
+@pytest.mark.asyncio
+async def test_change_password_invalid_access_token(db_session, jwt_manager):
+    """
+    Test errors raise while changing the password.
+    Check if access token is invalid.
+    """
+    login_response = await login_user(db_session=db_session, password="OldPassword123!")
+    assert (
+        login_response.status_code == 201
+    ), "Expected status code 201 for successful login."
+
+    login_response_2 = await login_user(
+        db_session=db_session, email="test2@email.com", password="StrongPassword123!"
+    )
+    assert (
+        login_response_2.status_code == 201
+    ), "Expected status code 201 for successful login."
+    payload = {
+        "email": "test@email.com",
+        "old_password": "OldPassword123!",
+        "new_password": "NewPassword123!",
+        "access_token": login_response_2.json()["access_token"],
+    }
+
+    response = await async_client.post("accounts/change-password/", json=payload)
+    expected_error = "Invalid access token."
+    assert response.status_code == 400, "Expected status code 400 for Bad request."
+    assert (
+        response.json()["detail"] == expected_error
+    ), f"Expected error: {expected_error}."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_new_password, expected_error",
+    [
+        ("short", "Password must contain at least 8 characters."),
+        ("NoDigitHere!", "Password must contain at least one digit."),
+        ("nodigitnorupper@", "Password must contain at least one uppercase letter."),
+        ("NOLOWERCASE1@", "Password must contain at least one lower letter."),
+        (
+            "NoSpecial123",
+            "Password must contain at least one special character: @, $, !, %, *, ?, #, &.",
+        ),
+    ],
+)
+async def test_change_password_validation(
+    db_session, invalid_new_password, expected_error, jwt_manager
+):
+    """
+    Test password strength validation in the user change_password endpoint.
+    Ensures that when an invalid password is provided, the endpoint returns the appropriate
+    error message and a 422 status code.
+
+        Args:
+            db_session: Data base session connection.
+            invalid_new_password (str): The password to test.
+            expected_error (str): The expected error message substring.
+    """
+    login_response = await login_user(db_session=db_session, password="OldPassword123!")
+    assert (
+        login_response.status_code == 201
+    ), "Expected status code 201 for successful login."
+
+    change_password_payload = {
+        "email": "test@email.com",
+        "old_password": "OldPassword123!",
+        "new_password": invalid_new_password,
+        "access_token": login_response.json()["access_token"],
+    }
+    change_password_response = await async_client.post(
+        "accounts/change-password/", json=change_password_payload
+    )
+
+    assert (
+        change_password_response.status_code == 422
+    ), "Expected status code 422 for invalid input."
+    response_data = change_password_response.json()
+    assert expected_error in str(
+        response_data
+    ), f"Expected error message: {expected_error}"

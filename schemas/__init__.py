@@ -9,4 +9,7 @@ from .accounts import (
     TokenRefreshRequestSchema,
     TokenRefreshResponseSchema,
     UserLogoutRequestSchema,
+    UserChangePasswordRequestSchema,
+    PasswordResetRequestSchema,
+    PasswordResetCompleteRequestSchema,
 )
