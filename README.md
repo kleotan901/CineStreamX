@@ -13,3 +13,7 @@ PYTHONPATH=$(pwd) pytest
 * redis-server
 * celery -A celery_app worker --loglevel=info
 * celery -A celery_app beat --loglevel=info
+
+### Run MailHog test server for email sending
++ in root dir run  - ./commands/setup_mailhog_auth.sh - to create Auth file  with user: admin and hashed password.
++ run server MailHog with cmd - MailHog
