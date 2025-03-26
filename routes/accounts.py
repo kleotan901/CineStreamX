@@ -3,18 +3,23 @@ from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select, delete
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import BASE_URL
-from config.dependencies import get_jwt_auth_manager, get_settings, get_accounts_email_notificator
+from config.dependencies import (
+    get_jwt_auth_manager,
+    get_settings,
+    get_accounts_email_notificator,
+    require_admin,
+)
 from config.settings import BaseAppSettings
 from crud import (
     get_user_by_email,
     create_user,
     get_activation_token,
     create_activation_token,
-    delete_activation_token,
+    delete_activation_token
 )
 from database import (
     get_db,
@@ -42,6 +47,7 @@ from schemas import (
     UserChangePasswordRequestSchema,
     PasswordResetRequestSchema,
     PasswordResetCompleteRequestSchema,
+    UserUpdateSchema,
 )
 from security.interfaces import JWTAuthManagerInterface
 
@@ -78,7 +84,7 @@ router = APIRouter()
 async def register_user(
         user_data: UserRegistrationRequestSchema,
         db: AsyncSession = Depends(get_db),
-        email_sender: EmailSenderInterface = Depends(get_accounts_email_notificator)
+        email_sender: EmailSenderInterface = Depends(get_accounts_email_notificator),
 ) -> UserRegistrationResponseSchema:
     db_user = await get_user_by_email(user_data.email, db)
     if db_user:
@@ -89,6 +95,14 @@ async def register_user(
 
     try:
         new_user = await create_user(user_data, db)
+        # Check if an existing activation token exists for the user
+        stmt = select(ActivationTokenModel).where(ActivationTokenModel.user_id == new_user.id)
+        result = await db.execute(stmt)
+        existing_token = result.scalars().first()
+        if existing_token:
+            await db.delete(existing_token)
+            await db.commit()  # Ensure deletion before inserting a new token
+
         await create_activation_token(new_user, db)
 
         activation_link = f"{BASE_URL}accounts/activate-complete/"
@@ -98,14 +112,14 @@ async def register_user(
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred during user creation.",
+            detail=f"An error occurred during user creation.",
         )
 
-    except Exception as e:
+    except Exception as error:
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Server Error --- {str(e)} ---",
+            detail=f"Server Error --- {str(error)} ---",
         )
 
     return UserRegistrationResponseSchema.model_validate(new_user)
@@ -138,7 +152,7 @@ async def register_user(
 async def activate_token(
         activation_data: ActivationTokenRequestSchema,
         db: AsyncSession = Depends(get_db),
-        email_sender: EmailSenderInterface = Depends(get_accounts_email_notificator)
+        email_sender: EmailSenderInterface = Depends(get_accounts_email_notificator),
 ) -> MessageResponseSchema:
     existing_user = await get_user_by_email(activation_data.email, db)
     if not existing_user:
@@ -170,9 +184,7 @@ async def activate_token(
         await create_activation_token(existing_user, db)
 
     activate_link = f"{BASE_URL}accounts/activate-complete/"
-    await email_sender.send_activation_email(
-        str(activation_data.email), activate_link
-    )
+    await email_sender.send_activation_email(str(activation_data.email), activate_link)
 
     return MessageResponseSchema(
         message="If you are registered, you will receive an email with instructions."
@@ -209,7 +221,7 @@ async def activate_token(
 async def account_activation_complete(
         activation_complete_data: ActivationAccountCompleteSchema,
         db: AsyncSession = Depends(get_db),
-        email_sender: EmailSenderInterface = Depends(get_accounts_email_notificator)
+        email_sender: EmailSenderInterface = Depends(get_accounts_email_notificator),
 ) -> MessageResponseSchema:
     token_record = await get_activation_token(activation_complete_data, db)
 
@@ -329,7 +341,9 @@ async def login_user(
             detail="An error occurred while processing the request.",
         )
 
-    jwt_access_token = jwt_manager.create_access_token({"user_id": user.id})
+    jwt_access_token = jwt_manager.create_access_token(
+        {"user_id": user.id, "group_id": user.group_id, "email":user.email}
+    )
     return UserLoginResponseSchema(
         access_token=jwt_access_token,
         refresh_token=jwt_refresh_token,
@@ -481,7 +495,9 @@ async def refresh_access_token(
             detail="User not found.",
         )
 
-    new_access_token = jwt_manager.create_access_token({"user_id": user_id})
+    new_access_token = jwt_manager.create_access_token(
+        {"user_id": user_id, "group_id": user.group_id, "email":user.email}
+    )
 
     return TokenRefreshResponseSchema(access_token=new_access_token)
 
@@ -575,7 +591,7 @@ async def change_password(
 async def request_password_reset_token(
         data: PasswordResetRequestSchema,
         db: AsyncSession = Depends(get_db),
-        email_sender: EmailSenderInterface = Depends(get_accounts_email_notificator)
+        email_sender: EmailSenderInterface = Depends(get_accounts_email_notificator),
 ) -> MessageResponseSchema:
     """
     Endpoint to request a password reset token.
@@ -656,8 +672,7 @@ async def request_password_reset_token(
 async def reset_password(
         data: PasswordResetCompleteRequestSchema,
         db: AsyncSession = Depends(get_db),
-        email_sender: EmailSenderInterface = Depends(get_accounts_email_notificator)
-
+        email_sender: EmailSenderInterface = Depends(get_accounts_email_notificator),
 ) -> MessageResponseSchema:
     """
     Endpoint for resetting a user's password.
@@ -715,8 +730,63 @@ async def reset_password(
         )
 
     login_link = f"{BASE_URL}/accounts/login/"
-    await email_sender.send_password_reset_complete_email(
-        str(data.email), login_link
-    )
+    await email_sender.send_password_reset_complete_email(str(data.email), login_link)
 
     return MessageResponseSchema(message="Password reset successfully.")
+
+
+@router.put("/{user_id}/manage-user/")
+async def manage_user(
+        user_id: int,
+        user_data: UserUpdateSchema,
+        db: AsyncSession = Depends(get_db),
+        current_user=Depends(require_admin),
+) -> MessageResponseSchema:
+    """
+        Endpoint for managing users, change group memberships and manually activate accounts.
+        Args:
+            user_id: int user's ID.
+            user_data (UserUpdateSchema): user's data for updating.
+            db (AsyncSession): The asynchronous database session.
+            current_user: The depends on require_admin,
+                only user with admin rights can manage date of other users.
+        Returns:
+            MessageResponseSchema: A response message indicating successful update user's data.
+        Raises:
+            HTTPException:
+                - 400 Bad Request if user's group does not exist in DB.
+                - 404 User not found.
+                - 403 Access forbidden: admins only.
+                - 401 Unauthorized error.
+        """
+    result = await db.execute(select(UserModel).where(UserModel.id == user_id))
+    user_obj = result.scalar_one_or_none()
+    if not user_obj:
+        raise HTTPException(status_code=404, detail="User not found")
+    try:
+        input_group_name = UserGroupEnum[user_data.group.upper()]
+        stmt = select(UserGroupModel).filter_by(name=input_group_name)
+        result = await db.execute(stmt)
+        db_group = result.scalars().first()
+
+        user_obj.group_id = db_group.id
+        user_obj.is_active = user_data.is_active
+        await db.commit()
+    except KeyError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The group does not exist!",
+        )
+    except IntegrityError as error:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"An error occurred {str(error)}",
+        )
+    except SQLAlchemyError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while user's data updating.",
+        )
+    return MessageResponseSchema(message="User was updated successfully!")

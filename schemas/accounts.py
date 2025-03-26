@@ -1,3 +1,5 @@
+from typing import Optional
+
 from pydantic import BaseModel, EmailStr, field_validator
 from database.validators.accounts import validate_password_strength
 
@@ -86,3 +88,10 @@ class PasswordResetRequestSchema(BaseModel):
 
 class PasswordResetCompleteRequestSchema(BaseEmailPasswordSchema):
     token: str
+
+
+class UserUpdateSchema(BaseModel):
+    is_active: Optional[bool] = False
+    group: str = "USER"
+
+    model_config = {"from_attributes": True}
