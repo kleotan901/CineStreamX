@@ -63,16 +63,26 @@ async def login_user(
 
 
 @pytest.mark.asyncio
-async def get_user_group(db_session):
-    stmt = select(UserGroupModel).where(UserGroupModel.name == UserGroupEnum.USER)
-    result = await db_session.execute(stmt)
-    user_group = result.scalars().first()
+async def login_user_with_admin_role(
+    seed_user_groups,
+    db_session: SessionLocal,
+    email: str = "admin@email.com",
+    password: str = "StrongPassword123!",
+):
+    await register_user(db_session=db_session, email=email)
 
-    if user_group is None:
-        user_group = UserGroupModel(name=UserGroupEnum.USER)
-        db_session.add(user_group)
-        await db_session.commit()
-    return user_group
+    stmt = select(UserModel).where(UserModel.email == email)
+    result = await db_session.execute(stmt)
+    admin = result.scalars().first()
+    admin.group_id = 3
+    admin.is_active = True
+    await db_session.commit()
+
+    login_payload = {"email": email, "password": password}
+    login_admin_response = await async_client.post(
+        "accounts/login/", json=login_payload
+    )
+    return login_admin_response
 
 
 @pytest.mark.asyncio
@@ -388,13 +398,17 @@ async def test_login_user_invalid_cases(db_session):
 
 
 @pytest.mark.asyncio
-async def test_login_user_commit_error(db_session):
+async def test_login_user_commit_error(db_session, seed_user_groups):
     """
     Test login when a database commit error occurs.
     Validates that the endpoint returns a 500 status code and an appropriate error message.
     """
     user_payload = {"email": "testuser@example.com", "password": "StrongPassword123!"}
-    user_group = await get_user_group(db_session)
+
+    stmt = select(UserGroupModel).where(UserGroupModel.name == UserGroupEnum.USER)
+    result = await db_session.execute(stmt)
+    user_group = result.scalars().first()
+
     assert user_group is not None, "Default user group should exist."
 
     user = UserModel.create(
@@ -658,8 +672,14 @@ async def test_change_password_expired_access_token(db_session, jwt_manager):
 @pytest.mark.asyncio
 async def test_change_password_invalid_access_token(db_session, jwt_manager):
     """
-    Test errors raise while changing the password.
-    Check if access token is invalid.
+    Test error handling when attempting to change a password with an invalid access token.
+    **Test Steps:**
+    1. Log in as `test@email.com` (valid credentials).
+    2. Log in as `test2@email.com` (valid credentials) and obtain an access token.
+    3. Attempt to change `test@email.com`'s password using `test2@email.com`'s access token.
+    **Expected Result:**
+    - The request should fail with **HTTP 400 Bad Request**.
+    - The response should contain an error message: `"Invalid access token."`
     """
     login_response = await login_user(db_session=db_session, password="OldPassword123!")
     assert (
@@ -736,3 +756,100 @@ async def test_change_password_validation(
     assert expected_error in str(
         response_data
     ), f"Expected error message: {expected_error}"
+
+
+@pytest.mark.asyncio
+async def test_update_user_data_by_admin_successfully(
+    db_session, jwt_manager, seed_user_groups
+):
+    """
+    Test update user's data by admin
+    (change group memberships and manually activate accounts).
+
+    **Test Steps:**
+    1. Register a user in the database (user with ID 1).
+    2. Register and log in as an admin user.
+    3. Attempt to update user 1's data by sending a request to the
+       'accounts/1/manage-user/' endpoint with the admin's access token.
+
+    **Expected Result:**
+    - The request should be **success** (HTTP 200) since only admins
+      are allowed to manage user data.
+    """
+    await register_user(db_session=db_session)
+    login_admin_response = await login_user_with_admin_role(
+        seed_user_groups=seed_user_groups, db_session=db_session
+    )
+    assert (
+        login_admin_response.status_code == 201
+    ), "Expected status code 201 for successful login."
+
+    admin_access_token = login_admin_response.json()["access_token"]
+    update_payload = {
+        "is_active": True,
+        "group": "MODERATOR",
+    }
+
+    response = await async_client.put(
+        "accounts/1/manage-user/",
+        json=update_payload,
+        headers={"Authorization": f"Bearer {admin_access_token}"},
+    )
+
+    decoded_access_data = jwt_manager.decode_access_token(admin_access_token)
+    assert (
+        decoded_access_data.get("group_id") == 3
+    ), "Expect group_id is 3 (user with ADMIN role)"
+
+    stmt_usr = select(UserModel).where(UserModel.id == 1)
+    result = await db_session.execute(stmt_usr)
+    db_user = result.scalars().first()
+
+    assert db_user.is_active is True
+    assert db_user.group_id == 2
+    assert (
+        response.status_code == 200
+    ), "Expect status 200, user's data was updated successfully"
+
+
+@pytest.mark.asyncio
+async def test_forbid_access_to_change_users_data_by_not_admin(db_session, jwt_manager):
+    """
+    Test to ensure that only ADMIN users can manage user data
+    (change group memberships and manually activate accounts).
+
+    **Test Steps:**
+    1. Register a user in the database (user with ID 1).
+    2. Register and log in as a non-admin user.
+    3. Attempt to update user 1's data by sending a request to the
+       'accounts/1/manage-user/' endpoint with the non-admin's access token.
+
+    **Expected Result:**
+    - The request should be **forbidden** (HTTP 403) since only admins
+      are allowed to manage user data.
+    """
+    await register_user(db_session=db_session)
+
+    login_not_admin_response = await login_user(
+        db_session=db_session, email="notadmin@email.com"
+    )
+    assert (
+        login_not_admin_response.status_code == 201
+    ), "Expected status code 201 for successful login."
+
+    not_admin_access_token = login_not_admin_response.json()["access_token"]
+
+    update_payload = {
+        "is_active": True,
+        "group": "MODERATOR",
+    }
+
+    response = await async_client.put(
+        "accounts/1/manage-user/",
+        json=update_payload,
+        headers={"Authorization": f"Bearer {not_admin_access_token}"},
+    )
+
+    assert (
+        response.status_code == 403
+    ), "Expect status 403, Forbidden access, admin only"

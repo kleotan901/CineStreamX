@@ -1,5 +1,6 @@
-import pytest
 import pytest_asyncio
+from sqlalchemy import insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.dependencies import get_settings
 from database import (
@@ -8,6 +9,8 @@ from database import (
     reset_database,
     Base,
     get_sqlite_db_contextmanager,
+    UserGroupModel,
+    UserGroupEnum,
 )
 from security.interfaces import JWTAuthManagerInterface
 from security.token_manager import JWTAuthManager
@@ -67,3 +70,17 @@ async def jwt_manager() -> JWTAuthManagerInterface:
         secret_key_refresh=settings.SECRET_KEY_REFRESH,
         algorithm=settings.JWT_SIGNING_ALGORITHM,
     )
+
+
+@pytest_asyncio.fixture(scope="function")
+async def seed_user_groups(db_session: AsyncSession):
+    """
+    Asynchronously seed the UserGroupModel table with default user groups.
+
+    This fixture inserts all user groups defined in UserGroupEnum into the database and commits the transaction.
+    It then yields the asynchronous database session for further testing.
+    """
+    groups = [{"name": group.value} for group in UserGroupEnum]
+    await db_session.execute(insert(UserGroupModel).values(groups))
+    await db_session.commit()
+    yield db_session
