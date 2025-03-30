@@ -5,4 +5,3 @@ from .settings import (
     CELERY_BROKER_URL,
     CELERY_RESULT_BACKEND,
 )
-from .dependencies import require_admin

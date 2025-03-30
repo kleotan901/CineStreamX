@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.settings import TestingSettings, Settings, BaseAppSettings
 
-from database import get_db, UserModel, UserGroupModel, UserGroupEnum
+from database import get_db, UserGroupModel, UserGroupEnum
 from exceptions import TokenExpiredError, InvalidTokenError
 from notifications import EmailSenderInterface, EmailSender
 
