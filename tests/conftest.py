@@ -1,5 +1,5 @@
 import pytest_asyncio
-from sqlalchemy import insert
+from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.dependencies import get_settings
@@ -11,6 +11,13 @@ from database import (
     get_sqlite_db_contextmanager,
     UserGroupModel,
     UserGroupEnum,
+)
+from database.models.movies import (
+    CertificationModel,
+    MovieModel,
+    GenreModel,
+    StarModel,
+    DirectorModel,
 )
 from security.interfaces import JWTAuthManagerInterface
 from security.token_manager import JWTAuthManager
@@ -82,5 +89,79 @@ async def seed_user_groups(db_session: AsyncSession):
     """
     groups = [{"name": group.value} for group in UserGroupEnum]
     await db_session.execute(insert(UserGroupModel).values(groups))
+    await db_session.commit()
+    yield db_session
+
+
+@pytest_asyncio.fixture(scope="function")
+async def seed_movie_certification(db_session: AsyncSession):
+    """
+    Asynchronously seed the CertificationModel table.
+    """
+    certifications = [{"name": f"PE-{cert_name}"} for cert_name in range(10)]
+    await db_session.execute(insert(CertificationModel).values(certifications))
+    await db_session.commit()
+    yield db_session
+
+
+@pytest_asyncio.fixture(scope="function")
+async def seed_genres(db_session: AsyncSession):
+    genres = [{"name": f"Genre-{number}"} for number in range(10)]
+    await db_session.execute(insert(GenreModel).values(genres))
+    await db_session.commit()
+    yield db_session
+
+
+@pytest_asyncio.fixture(scope="function")
+async def seed_stars(db_session: AsyncSession):
+    stars = [{"name": f"Actor-{number}"} for number in range(10)]
+    await db_session.execute(insert(StarModel).values(stars))
+    await db_session.commit()
+    yield db_session
+
+
+@pytest_asyncio.fixture(scope="function")
+async def seed_directors(db_session: AsyncSession):
+    directors = [{"name": f"Director-{number}"} for number in range(10)]
+    await db_session.execute(insert(DirectorModel).values(directors))
+    await db_session.commit()
+    yield db_session
+
+
+@pytest_asyncio.fixture(scope="function")
+async def seed_movies(db_session: AsyncSession):
+    """
+    Asynchronously seed the MovieModel table.
+    """
+    genres = await db_session.execute(
+        select(GenreModel).where(GenreModel.id.in_([1, 3]))
+    )
+    stars = await db_session.execute(select(StarModel).where(StarModel.id.in_([4, 5])))
+    directors = await db_session.execute(
+        select(DirectorModel).where(DirectorModel.id.in_([2]))
+    )
+
+    genres = genres.scalars().all()
+    stars = stars.scalars().all()
+    directors = directors.scalars().all()
+
+    for number in range(1, 30):
+        movie_data = MovieModel(
+            name=f"TestMovie - {number}",
+            year=2020,
+            time=109,
+            imdb=9,
+            votes=3000000,
+            meta_score=84,
+            gross=1006000000,
+            description="Some test description",
+            price=104.00,
+            certification_id=1,
+            genres=genres,
+            stars=stars,
+            directors=directors,
+        )
+        db_session.add(movie_data)
+
     await db_session.commit()
     yield db_session

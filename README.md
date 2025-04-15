@@ -17,3 +17,15 @@ PYTHONPATH=$(pwd) pytest
 ### Run MailHog test server for email sending
 + in root dir run  - ./commands/setup_mailhog_auth.sh - to create Auth file  with user: admin and hashed password.
 + run server MailHog with cmd - MailHog
+
+
+##### `/schemas/`
+
+Defines the data schemas using Pydantic for request validation and response models.
+
+- **`__init__.py`**: Initializes the `schemas` module.
+- **`accounts.py`**: Schemas for account-related operations.
+- **`examples/`**: Contains example schemas used for documentation or testing.
+  - **`__init__.py`**: Initializes the `examples` module.
+  - **`movies.py`**: Example schemas for movie data.
+- **`movies.py`**: Schemas for movie-related operations.
