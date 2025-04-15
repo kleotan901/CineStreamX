@@ -12,5 +12,5 @@ from .accounts import (
     UserChangePasswordRequestSchema,
     PasswordResetRequestSchema,
     PasswordResetCompleteRequestSchema,
-    UserUpdateSchema
+    UserUpdateSchema,
 )

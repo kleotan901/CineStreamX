@@ -1,6 +1,8 @@
 import decimal
 
 import uuid
+from typing import List
+
 from sqlalchemy import (
     Column,
     Integer,
@@ -117,6 +119,8 @@ class CertificationModel(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
 
+    movies: Mapped[List["MovieModel"]] = relationship("MovieModel", back_populates="certification")
+
     def __repr__(self):
         return f"<Certification(name='{self.name}')>"
 
@@ -126,7 +130,7 @@ class MovieModel(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     uuid: Mapped[str] = mapped_column(UUID(as_uuid=True), unique=True, nullable=False, default=uuid.uuid4)
-    name: Mapped[str] = mapped_column(String(250), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(250), nullable=False)
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     time: Mapped[int] = mapped_column(Integer, nullable=False)
     imdb: Mapped[float] = mapped_column(Float, nullable=False)
@@ -138,7 +142,7 @@ class MovieModel(Base):
     certification_id: Mapped[int] = mapped_column(
         ForeignKey("certifications.id"), nullable=False
     )
-    certification: Mapped[CertificationModel] = relationship(
+    certification: Mapped["CertificationModel"] = relationship(
         "CertificationModel", back_populates="movies"
     )
 
@@ -159,7 +163,7 @@ class MovieModel(Base):
 
     @classmethod
     def default_order_by(cls):
-        return [cls.id.desc()]
+        return [cls.year.desc()]
 
     def __repr__(self):
         return f"<Movie(name='{self.name}', duration='{self.time}', votes={self.votes})>"
