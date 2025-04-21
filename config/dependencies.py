@@ -1,6 +1,6 @@
 import os
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +9,7 @@ from config.settings import TestingSettings, Settings, BaseAppSettings
 
 from database import get_db, UserGroupModel, UserGroupEnum
 from exceptions import TokenExpiredError, InvalidTokenError
+from exceptions.security import BaseSecurityError
 from notifications import EmailSenderInterface, EmailSender
 
 from security.interfaces import JWTAuthManagerInterface
@@ -179,3 +180,26 @@ async def require_moderator(
         raise HTTPException(status_code=403, detail="Access forbidden: moderator or admin only")
 
     return group
+
+
+async def get_user_id_from_headers(
+        request: Request,
+        jwt_manager: JWTAuthManagerInterface = Depends(get_jwt_auth_manager)
+) -> int:
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authorization header")
+    token = auth_header.split()[1]
+    try:
+        decoded_token = jwt_manager.decode_access_token(token)
+        user_id = decoded_token.get("user_id")
+    except TokenExpiredError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Token has expired."
+        )
+    except BaseSecurityError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(error),
+        )
+    return user_id
