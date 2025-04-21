@@ -6,14 +6,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from database import Base, get_db
-from database.models.movies import MovieModel, GenreModel, StarModel, DirectorModel, CertificationModel
+from database.models.movies import (
+    MovieModel,
+    GenreModel,
+    StarModel,
+    DirectorModel,
+    CertificationModel,
+)
 
 
 async def get_existing_movie(movie_data, db):
     stmt = select(MovieModel).where(
         MovieModel.name == movie_data.name,
         MovieModel.year == movie_data.year,
-        MovieModel.time == movie_data.time
+        MovieModel.time == movie_data.time,
     )
     result = await db.execute(stmt)
     existing_movie = result.scalars().first()
@@ -21,7 +27,7 @@ async def get_existing_movie(movie_data, db):
 
 
 async def get_or_create_item(
-        movies_data_items: List[str], model: Type[Any], db: AsyncSession = Depends(get_db)
+    movies_data_items: List[str], model: Type[Any], db: AsyncSession = Depends(get_db)
 ):
     items = []
     for item_name in movies_data_items:
@@ -39,27 +45,29 @@ async def get_or_create_item(
 
 
 async def add_movie(movies_data, db):
-    stmt = select(CertificationModel).where(CertificationModel.id == movies_data.certification_id)
+    stmt = select(CertificationModel).where(
+        CertificationModel.id == movies_data.certification_id
+    )
     result = await db.execute(stmt)
     certification = result.scalars().first()
     if not certification:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Incorrect certification id"
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Incorrect certification id"
         )
     try:
         if movies_data.genres:
             genres = await get_or_create_item(movies_data.genres, GenreModel, db)
-            print(genres)
         if movies_data.stars:
             stars = await get_or_create_item(movies_data.stars, StarModel, db)
         if movies_data.directors:
-            directors = await get_or_create_item(movies_data.directors, DirectorModel, db)
+            directors = await get_or_create_item(
+                movies_data.directors, DirectorModel, db
+            )
     except Exception as error:
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An error occurred during user creation. {str(error)}"
+            detail=f"An error occurred during user creation. {str(error)}",
         )
     new_movie = MovieModel(
         name=movies_data.name,
@@ -74,7 +82,7 @@ async def add_movie(movies_data, db):
         certification_id=certification.id,
         genres=genres,
         stars=stars,
-        directors=directors
+        directors=directors,
     )
     db.add(new_movie)
     await db.commit()
@@ -89,6 +97,7 @@ async def get_movie_by_id(movie_id, db):
             joinedload(MovieModel.genres),
             joinedload(MovieModel.stars),
             joinedload(MovieModel.directors),
+            joinedload(MovieModel.comments),
         )
         .where(MovieModel.id == movie_id)
     )
@@ -98,10 +107,7 @@ async def get_movie_by_id(movie_id, db):
 
 
 async def get_search_result(
-        search_by_name_or_description,
-        search_by_star,
-        search_by_director,
-        db
+    search_by_name_or_description, search_by_star, search_by_director, db
 ):
     search_result_lst = []
 
@@ -117,30 +123,36 @@ async def get_search_result(
         search_result_lst.append(
             or_(
                 MovieModel.name.ilike(f"%{search_by_name_or_description}%"),
-                MovieModel.description.ilike(f"%{search_by_name_or_description}%")
+                MovieModel.description.ilike(f"%{search_by_name_or_description}%"),
             )
         )
     if search_by_star:
-        matching_stars = [star for star in stars if search_by_star.lower() in star.name.lower()]
+        matching_stars = [
+            star for star in stars if search_by_star.lower() in star.name.lower()
+        ]
         if matching_stars:
             search_result_lst.append(
-                MovieModel.stars.any(StarModel.id.in_([star.id for star in matching_stars]))
+                MovieModel.stars.any(
+                    StarModel.id.in_([star.id for star in matching_stars])
+                )
             )
     if search_by_director:
         matching_directors = [
-            director for director in directors if search_by_director.lower() in director.name.lower()
+            director
+            for director in directors
+            if search_by_director.lower() in director.name.lower()
         ]
         if matching_directors:
-            search_result_lst.append(MovieModel.directors.any(
-                DirectorModel.id.in_([star.id for star in matching_directors])
-            ))
+            search_result_lst.append(
+                MovieModel.directors.any(
+                    DirectorModel.id.in_([star.id for star in matching_directors])
+                )
+            )
 
     return search_result_lst
 
 
-async def get_filter_result(
-        year, imdb, filter_by_genre, db
-):
+async def get_filter_result(year, imdb, filter_by_genre, db):
     filters = []
     # filtering by year
     if year:
@@ -154,10 +166,14 @@ async def get_filter_result(
         result_genre = await db.execute(stmt_genre)
         genres = result_genre.scalars().all()
 
-        matching_genres = [genre for genre in genres if filter_by_genre.lower() in genre.name.lower()]
+        matching_genres = [
+            genre for genre in genres if filter_by_genre.lower() in genre.name.lower()
+        ]
         if matching_genres:
             filters.append(
-                MovieModel.genres.any(GenreModel.id.in_([genre.id for genre in matching_genres]))
+                MovieModel.genres.any(
+                    GenreModel.id.in_([genre.id for genre in matching_genres])
+                )
             )
 
     return filters

@@ -1,23 +1,29 @@
 import math
-from typing import List, Optional, Annotated
+from typing import Optional, Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from fastapi_filters import create_filters, create_filters_from_model, FilterValues
-from sqlalchemy import select, func, or_
+from fastapi_filters import create_filters
+from sqlalchemy import select, func, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from watchfiles import awatch
 
+from config.dependencies import get_user_id_from_headers
 from crud import get_existing_movie, add_movie
 from crud.movies import get_movie_by_id, get_search_result, get_filter_result
 from database import get_db
-from database.models.movies import MovieModel, StarsMoviesModel, StarModel, DirectorModel
+from database.models.movies import MovieModel, MovieLikeModel, CommentModel
 from schemas.movies import (
     BaseMovieSchema,
     MovieCreateSchema,
     MessageSchema,
-    MovieListSchema,
-    MovieListResponseSchema, MovieDetailSchema, FilterParams, GenreSchema, StarSchema, DirectorSchema,
+    MovieListResponseSchema,
+    MovieDetailSchema,
+    FilterParams,
+    MovieIsLikeScheme,
+    CommentInputSchema,
+    CommentSchema,
 )
+from security.interfaces import JWTAuthManagerInterface
 
 router = APIRouter()
 MovieFilter = create_filters()
@@ -31,34 +37,24 @@ MovieFilter = create_filters()
     status_code=status.HTTP_200_OK,
 )
 async def get_movies_list(
-        sorting_query: FilterParams = Depends(),
-        year: Optional[int] = Query(
-            default=None,
-            description="Filtering movies by year"
-        ),
-        imdb: Optional[float] = Query(
-            default=None,
-            description="Filtering movies by imdb"
-        ),
-        filter_by_genre: Optional[str] = Query(
-            default=None,
-            description="Filtering movies by genre"
-        ),
-        search_by_name_or_description: Optional[str] = Query(
-            default=None,
-            description="Search movies by name or description"
-        ),
-        search_by_star: Optional[str] = Query(
-            default=None,
-            description="Search movies by star"
-        ),
-        search_by_director: Optional[str] = Query(
-            default=None,
-            description="Search movies by director"
-        ),
-        page: int = Query(1, ge=1, description="Page number (1-based index)"),
-        per_page: int = Query(10, ge=1, le=20, description="Number of items per page"),
-        db: AsyncSession = Depends(get_db),
+    sorting_query: FilterParams = Depends(),
+    year: Optional[int] = Query(default=None, description="Filtering movies by year"),
+    imdb: Optional[float] = Query(default=None, description="Filtering movies by imdb"),
+    filter_by_genre: Optional[str] = Query(
+        default=None, description="Filtering movies by genre"
+    ),
+    search_by_name_or_description: Optional[str] = Query(
+        default=None, description="Search movies by name or description"
+    ),
+    search_by_star: Optional[str] = Query(
+        default=None, description="Search movies by star"
+    ),
+    search_by_director: Optional[str] = Query(
+        default=None, description="Search movies by director"
+    ),
+    page: int = Query(1, ge=1, description="Page number (1-based index)"),
+    per_page: int = Query(10, ge=1, le=20, description="Number of items per page"),
+    db: AsyncSession = Depends(get_db),
 ) -> MovieListResponseSchema:
     count_stmt = select(func.count(MovieModel.id))
     result_count = await db.execute(count_stmt)
@@ -75,7 +71,9 @@ async def get_movies_list(
         if filters_result:
             filters_lst.extend(filters_result)
         else:
-            raise HTTPException(status_code=404, detail="No movies found for the selected filter.")
+            raise HTTPException(
+                status_code=404, detail="No movies found for the selected filter."
+            )
 
     # ✅ searching
     if search_by_name_or_description or search_by_star or search_by_director:
@@ -157,14 +155,14 @@ async def get_movies_list(
     },
 )
 async def create_movie(
-        movies_data: MovieCreateSchema, db: AsyncSession = Depends(get_db)
+    movies_data: MovieCreateSchema, db: AsyncSession = Depends(get_db)
 ) -> MessageSchema:
     existing_movie = await get_existing_movie(movies_data, db)
     if existing_movie:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"The movie '{movies_data.name}' ({movies_data.year}), "
-                   f"with a duration of {movies_data.time} minutes, already exists in the database.",
+            f"with a duration of {movies_data.time} minutes, already exists in the database.",
         )
 
     await add_movie(movies_data, db)
@@ -182,28 +180,136 @@ async def create_movie(
         404: {
             "description": "Not found - Movie with id not found.",
             "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Movie with id not found.."
-                    }
-                }
+                "application/json": {"example": {"detail": "Movie with id not found.."}}
             },
         },
         500: {
             "description": "Internal Server Error - An error occurred.",
             "content": {
-                "application/json": {
-                    "example": {"detail": "An error occurred."}
-                }
+                "application/json": {"example": {"detail": "An error occurred."}}
             },
         },
     },
 )
 async def movie_detail(
-        movie_id: int, db: AsyncSession = Depends(get_db)
+    movie_id: int, db: AsyncSession = Depends(get_db)
 ) -> MovieDetailSchema:
     movie = await get_movie_by_id(movie_id, db)
     if not movie:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Movie with id not found.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Movie with id not found."
+        )
 
     return MovieDetailSchema.model_validate(movie)
+
+
+@router.patch(
+    path="/movies/is_like/{movie_id}/",
+    response_model=MovieDetailSchema,
+    summary="Like or dislike movies (Authorization required)",
+    description="Set is_like True or False and count likes or dislikes.",
+    status_code=status.HTTP_200_OK,
+)
+async def movie_like(
+    movie_id: int,
+    input_is_like: bool = None,
+    user_id: int = Depends(get_user_id_from_headers),
+    db: AsyncSession = Depends(get_db),
+) -> MovieDetailSchema:
+    movie = await get_movie_by_id(movie_id, db)
+    if not movie:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Movie with id not found."
+        )
+    stmt = select(MovieLikeModel).where(
+        MovieLikeModel.movie_id == movie_id, MovieLikeModel.user_id == user_id
+    )
+    result = await db.execute(stmt)
+    existing = result.scalar_one_or_none()
+
+    if existing is None:
+        if input_is_like is True:
+            db.add(MovieLikeModel(user_id=user_id, movie_id=movie_id, is_like=True))
+            await db.execute(
+                update(MovieModel)
+                .where(MovieModel.id == movie_id)
+                .values(likes_count=MovieModel.likes_count + 1)
+            )
+        if input_is_like is False:
+            db.add(MovieLikeModel(user_id=user_id, movie_id=movie_id, is_like=False))
+            await db.execute(
+                update(MovieModel)
+                .where(MovieModel.id == movie_id)
+                .values(
+                    dislikes_count=MovieModel.dislikes_count + 1,
+                )
+            )
+    else:
+        if existing.is_like is True and input_is_like is True:
+            return MovieDetailSchema.model_validate(movie)
+        if existing.is_like is False and input_is_like is False:
+            return MovieDetailSchema.model_validate(movie)
+        if existing.is_like is True and input_is_like is False:
+            print("existing.is_like", existing.is_like, "input_is_like", input_is_like)
+            existing.is_like = False
+            await db.execute(
+                update(MovieModel)
+                .where(MovieModel.id == movie_id)
+                .values(
+                    likes_count=MovieModel.likes_count - 1,
+                    dislikes_count=MovieModel.dislikes_count + 1,
+                )
+            )
+        if existing.is_like is False and input_is_like is True:
+            existing.is_like = True
+            await db.execute(
+                update(MovieModel)
+                .where(MovieModel.id == movie_id)
+                .values(
+                    likes_count=MovieModel.likes_count + 1,
+                    dislikes_count=MovieModel.dislikes_count - 1,
+                )
+            )
+    await db.commit()
+
+    return MovieDetailSchema.model_validate(movie)
+
+
+@router.post(
+    path="/movies/comment/{movie_id}/",
+    response_model=MessageSchema,
+    summary="Add comment for movie (Authorization required)",
+    description="Post comment for movie.",
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_comment(
+    movie_id: int,
+    comment_data: CommentInputSchema,
+    user_id: int = Depends(get_user_id_from_headers),
+    db: AsyncSession = Depends(get_db),
+) -> MessageSchema:
+    movie = await get_movie_by_id(movie_id, db)
+    if not movie:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Movie with id not found."
+        )
+    if not comment_data.comment.strip():
+        raise HTTPException(status_code=400, detail="Comment cannot be empty")
+
+    try:
+        db.add(
+            CommentModel(
+                user_id=user_id, movie_id=movie_id, comment=comment_data.comment.strip()
+            )
+        )
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create comment due to integrity error.",
+        )
+
+    return MessageSchema.model_validate(
+        {"message": "Comment was created successfully!"}
+    )

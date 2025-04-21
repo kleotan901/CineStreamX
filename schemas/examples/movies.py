@@ -33,7 +33,7 @@ movie_create_schema_example = {
     "certification_id": 1,
     "genres": ["Crime", "Adventure"],
     "stars": ["John Doe", "Jane Doe"],
-    "directors": ["Christopher Nolan"],
+    "directors": ["Christopher Nolan"]
 }
 
 certification_schema_example = {"id": 1, "name": "PG-13"}
@@ -43,6 +43,8 @@ genre_schema_example = {"id": 1, "name": "Crime"}
 star_schema_example = {"id": 1, "name": "Christian Bale"}
 
 director_schema_example = {"id": 1, "name": "Christopher Nolan"}
+
+comment_schema_example = {"user_id": 1, "comment": "text of comment"}
 
 movie_detail_schema_example = {
     "id": 933,

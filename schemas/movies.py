@@ -11,6 +11,7 @@ from schemas.examples.movies import (
     movie_detail_schema_example,
     certification_schema_example,
     movie_list_response_schema_example,
+    comment_schema_example,
 )
 
 
@@ -103,8 +104,29 @@ class CertificationSchema(BaseModel):
     }
 
 
+class CommentSchema(BaseModel):
+    user_id: int
+    comment: str
+
+    model_config = {
+        "from_attributes": True,
+        "json_schema_extra": {"examples": [comment_schema_example]},
+    }
+
+
+class CommentInputSchema(BaseModel):
+    comment: str
+
+    model_config = {
+        "from_attributes": True,
+    }
+
+
 class MovieDetailSchema(BaseMovieSchema):
     id: int
+    likes_count: int
+    dislikes_count: int
+    comments: List[CommentSchema] = None
 
     genres: List[GenreSchema] = None
     stars: List[StarSchema] = None
@@ -113,4 +135,14 @@ class MovieDetailSchema(BaseMovieSchema):
     model_config = {
         "from_attributes": True,
         "json_schema_extra": {"examples": [movie_detail_schema_example]},
+    }
+
+
+class MovieIsLikeScheme(BaseModel):
+    movie_id: int
+    user_id: int
+    is_like: bool
+
+    model_config = {
+        "from_attributes": True,
     }

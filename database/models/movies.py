@@ -14,6 +14,7 @@ from sqlalchemy import (
     UUID,
     Text,
     DECIMAL,
+    Boolean,
 )
 from sqlalchemy.orm import mapped_column, Mapped, relationship
 
@@ -119,7 +120,9 @@ class CertificationModel(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
 
-    movies: Mapped[List["MovieModel"]] = relationship("MovieModel", back_populates="certification")
+    movies: Mapped[List["MovieModel"]] = relationship(
+        "MovieModel", back_populates="certification"
+    )
 
     def __repr__(self):
         return f"<Certification(name='{self.name}')>"
@@ -129,7 +132,9 @@ class MovieModel(Base):
     __tablename__ = "movies"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    uuid: Mapped[str] = mapped_column(UUID(as_uuid=True), unique=True, nullable=False, default=uuid.uuid4)
+    uuid: Mapped[str] = mapped_column(
+        UUID(as_uuid=True), unique=True, nullable=False, default=uuid.uuid4
+    )
     name: Mapped[str] = mapped_column(String(250), nullable=False)
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     time: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -156,6 +161,12 @@ class MovieModel(Base):
     directors: Mapped[list["DirectorModel"]] = relationship(
         "DirectorModel", secondary=DirectorsMoviesModel, back_populates="movies"
     )
+    likes_count = Column(Integer, default=0, nullable=False)
+    dislikes_count = Column(Integer, default=0, nullable=False)
+    likes = relationship("MovieLikeModel", back_populates="movies")
+    comments: Mapped[list["CommentModel"]] = relationship(
+        "CommentModel", back_populates="movies"
+    )
 
     __table_args__ = (
         UniqueConstraint("name", "year", "time", name="unique_movie_constraint"),
@@ -166,4 +177,33 @@ class MovieModel(Base):
         return [cls.year.desc()]
 
     def __repr__(self):
-        return f"<Movie(name='{self.name}', duration='{self.time}', votes={self.votes})>"
+        return (
+            f"<Movie(name='{self.name}', duration='{self.time}', votes={self.votes})>"
+        )
+
+
+class MovieLikeModel(Base):
+    __tablename__ = "movie_likes"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    movie_id = Column(Integer, ForeignKey("movies.id"), nullable=False)
+    is_like = Column(Boolean, nullable=False)
+
+    movies = relationship("MovieModel", back_populates="likes")
+    user = relationship("UserModel", back_populates="movie_likes")
+
+    # unique constraint so a user can like/dislike each movie only once
+    __table_args__ = (UniqueConstraint("user_id", "movie_id", name="uix_user_movie"),)
+
+
+class CommentModel(Base):
+    __tablename__ = "movie_comments"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    movie_id = Column(Integer, ForeignKey("movies.id"), nullable=False)
+    comment = Column(Text, nullable=False)
+
+    movies = relationship("MovieModel", back_populates="comments")
+    user = relationship("UserModel", back_populates="comments")
