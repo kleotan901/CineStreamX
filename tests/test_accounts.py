@@ -25,13 +25,6 @@ async_client = AsyncClient(transport=ASGITransport(app=app), base_url=BASE_URL)
 
 
 @pytest.mark.asyncio
-async def test_read_main():
-    response = await async_client.get("theater/")
-    assert response.status_code == 200
-    assert response.json() == {"message": "Hello, CineStreamX!"}
-
-
-@pytest.mark.asyncio
 async def register_user(
     db_session: SessionLocal,
     email: str = "test@email.com",

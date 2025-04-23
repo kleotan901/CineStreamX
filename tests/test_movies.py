@@ -1,16 +1,17 @@
 import logging
-from wsgiref.validate import assert_
 
 import pytest
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy import select, func
 
+from database import UserModel
 from database.models.movies import (
     CertificationModel,
     GenreModel,
     StarModel,
     DirectorModel,
     MovieModel,
+    CommentModel,
 )
 from main import app
 
@@ -50,6 +51,27 @@ async def create_movie_in_db(
     }
     response = await async_client.post(f"{BASE_URL}movies/", json=payload)
     return response
+
+
+@pytest.mark.asyncio
+async def create_user_in_db(db_session):
+    # create user
+    user = UserModel.create(
+        email="test@email.com", raw_password="TestPassword123!", group_id=1
+    )
+    user.is_active = True
+    db_session.add(user)
+    await db_session.commit()
+    # retrieve user from DB
+    stmt = select(UserModel).where(UserModel.email == "test@email.com")
+    result = await db_session.execute(stmt)
+    user = result.scalars().first()
+    return user
+
+
+@pytest.mark.asyncio
+async def get_access_token(user, jwt_manager):
+    return jwt_manager.create_access_token({"user_id": user.id})
 
 
 @pytest.mark.asyncio
@@ -329,3 +351,202 @@ async def test_create_movie_no_certificate(db_session):
     response_data = response.json()
     assert response.status_code == 400
     assert response_data["detail"] == "Incorrect certification id"
+
+
+@pytest.mark.asyncio
+async def test_like_movie(
+    db_session, seed_genres, seed_stars, seed_directors, seed_movies, jwt_manager
+):
+    """
+    Tests the scenario where a user likes a movie.
+    Initial state:
+        - Movie has 13 likes and 4 dislikes.
+    Steps:
+        1. An authorized user likes the movie.
+        2. Total likes should become 14; dislikes remain 4.
+    """
+    movie_stmt = select(MovieModel)
+    result = await db_session.execute(movie_stmt)
+    db_movie = result.scalars().first()
+    db_movie.likes_count = 13
+    db_movie.dislikes_count = 4
+    db_session.add(db_movie)
+    await db_session.commit()
+
+    user = await create_user_in_db(db_session)
+    access_token = await get_access_token(user, jwt_manager)
+
+    payload = {"movie_id": db_movie.id}
+    response = await async_client.patch(
+        f"{BASE_URL}movies/is_like/{db_movie.id}/?input_is_like=true",
+        json=payload,
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["likes_count"] == 14, "Should be 14 likes for movie"
+    assert (
+        response.json()["dislikes_count"] == 4
+    ), "Should left only 4 dislikes for movie"
+
+
+@pytest.mark.asyncio
+async def test_user_toggle_like_to_dislike_on_movie(
+    db_session, seed_genres, seed_stars, seed_directors, seed_movies, jwt_manager
+):
+    """
+    Tests the scenario where a user initially likes a movie and then changes their reaction to a dislike.
+    Initial state:
+        - Movie has 10 likes and 4 dislikes.
+    Steps:
+        1. An authorized user likes the movie.
+        2. Total likes should become 11; dislikes remain 4.
+        3. The same user changes their like to a dislike.
+        4. Total likes should decrease to 10; dislikes should increase to 5.
+    """
+    movie_stmt = select(MovieModel)
+    result = await db_session.execute(movie_stmt)
+    db_movie = result.scalars().first()
+    db_movie.likes_count = 10
+    db_movie.dislikes_count = 4
+    db_session.add(db_movie)
+    await db_session.commit()
+
+    user = await create_user_in_db(db_session)
+    access_token = await get_access_token(user, jwt_manager)
+
+    payload = {"movie_id": db_movie.id}
+    response_is_like_true = await async_client.patch(
+        f"{BASE_URL}movies/is_like/{db_movie.id}/?input_is_like=true",
+        json=payload,
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+    assert response_is_like_true.status_code == 200
+    assert response_is_like_true.json()["likes_count"] == 11, "Should become 11 likes"
+    assert (
+        response_is_like_true.json()["dislikes_count"] == 4
+    ), "Should remain 4 dislikes"
+
+    response_is_like_false = await async_client.patch(
+        f"{BASE_URL}movies/is_like/{db_movie.id}/?input_is_like=false",
+        json=payload,
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert response_is_like_false.json()["likes_count"] == 10, "Should become 10 likes"
+    assert (
+        response_is_like_false.json()["dislikes_count"] == 5
+    ), "Should become 5 dislikes"
+
+
+@pytest.mark.asyncio
+async def test_add_comment_to_movie(db_session, seed_movie_certification, jwt_manager):
+    """
+    Tests case an authorized user post comment to movie.
+    """
+    await create_movie_in_db()
+
+    stmt_movie = select(MovieModel).where(MovieModel.id == 1)
+    result = await db_session.execute(stmt_movie)
+    movie = result.scalars().first()
+
+    user = await create_user_in_db(db_session)
+    access_token = await get_access_token(user, jwt_manager)
+
+    payload = {"comment": "Some text of comment"}
+    response = await async_client.post(
+        f"{BASE_URL}movies/comment/{movie.id}/",
+        json=payload,
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["message"] == "Comment was created successfully!"
+
+    comment_stmt = select(CommentModel).where(CommentModel.movie_id == movie.id)
+    res = await db_session.execute(comment_stmt)
+    comment_db = res.scalars().first()
+    assert comment_db.comment == "Some text of comment"
+
+
+@pytest.mark.asyncio
+async def test_not_empty_comment(db_session, seed_movie_certification, jwt_manager):
+    """
+    Test case for handling errors when adding a comment.
+    Scenario:
+        - User attempts to post an empty comment.
+        - The system should raise an error with the message: 'Comment cannot be empty'.
+    """
+    await create_movie_in_db()
+
+    stmt_movie = select(MovieModel).where(MovieModel.id == 1)
+    result = await db_session.execute(stmt_movie)
+    movie = result.scalars().first()
+
+    user = await create_user_in_db(db_session)
+    access_token = await get_access_token(user, jwt_manager)
+
+    payload = {"comment": ""}
+    response = await async_client.post(
+        f"{BASE_URL}movies/comment/{movie.id}/",
+        json=payload,
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Comment cannot be empty"
+
+
+@pytest.mark.asyncio
+async def test_get_all_comments_of_user(
+    db_session, seed_movie_certification, jwt_manager
+):
+    """
+    Test case for retrieving all comments of authorized user.
+    """
+    await create_movie_in_db(name="The Test Movie 1")
+    await create_movie_in_db(name="The Test Movie 2")
+
+    stmt_movie = select(MovieModel)
+    result = await db_session.execute(stmt_movie)
+    movie = result.scalars().all()
+
+    test_user = await create_user_in_db(db_session)
+    access_token = await get_access_token(test_user, jwt_manager)
+
+    payload = {"comment": "The first comment of test_user to The Test Movie 1"}
+    response_first_comment = await async_client.post(
+        f"{BASE_URL}movies/comment/{movie[0].id}/",
+        json=payload,
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert response_first_comment.status_code == 201
+
+    payload = {"comment": "The second comment of test_user to The Test Movie 2"}
+    response_second_comment = await async_client.post(
+        f"{BASE_URL}movies/comment/{movie[1].id}/",
+        json=payload,
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert response_second_comment.status_code == 201
+
+    payload = {"comment": "The third comment of test_user to The Test Movie 1"}
+    response_first_comment = await async_client.post(
+        f"{BASE_URL}movies/comment/{movie[0].id}/",
+        json=payload,
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert response_first_comment.status_code == 201
+
+    comments_stmt = select(CommentModel).where(CommentModel.user_id == test_user.id)
+    result = await db_session.execute(comments_stmt)
+    comments_of_test_user = result.scalars().all()
+    assert len(comments_of_test_user) == 3
+    assert (
+        comments_of_test_user[0].comment
+        == "The first comment of test_user to The Test Movie 1"
+    )
+    assert (
+        comments_of_test_user[2].comment
+        == "The third comment of test_user to The Test Movie 1"
+    )

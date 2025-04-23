@@ -22,9 +22,7 @@ async_client = AsyncClient(transport=ASGITransport(app=app), base_url=BASE_URL)
 async def test_request_password_reset_token_success(db_session):
     """
     Test successful password reset token request.
-
     Ensures that a password reset token is created for an active user.
-
     Steps:
     - Register a new user.
     - Mark the user as active.
