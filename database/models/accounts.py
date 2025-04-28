@@ -70,6 +70,7 @@ class UserModel(Base):
 
     movie_likes = relationship("MovieLikeModel", back_populates="user")
     comments = relationship("CommentModel", back_populates="user")
+    favorites = relationship("FavoriteMovieModel", back_populates="user")
 
     group_id: Mapped[int] = mapped_column(
         ForeignKey("user_groups.id", ondelete="CASCADE"), nullable=False

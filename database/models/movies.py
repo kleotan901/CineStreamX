@@ -167,6 +167,9 @@ class MovieModel(Base):
     comments: Mapped[list["CommentModel"]] = relationship(
         "CommentModel", back_populates="movies"
     )
+    favorites: Mapped[list["FavoriteMovieModel"]] = relationship(
+        "FavoriteMovieModel", back_populates="movies"
+    )
 
     __table_args__ = (
         UniqueConstraint("name", "year", "time", name="unique_movie_constraint"),
@@ -207,3 +210,16 @@ class CommentModel(Base):
 
     movies = relationship("MovieModel", back_populates="comments")
     user = relationship("UserModel", back_populates="comments")
+
+
+class FavoriteMovieModel(Base):
+    __tablename__ = "favorite_movies"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    movie_id = Column(Integer, ForeignKey("movies.id"), nullable=False)
+
+    movies = relationship("MovieModel", back_populates="favorites")
+    user = relationship("UserModel", back_populates="favorites")
+
+    __table_args__ = (UniqueConstraint("user_id", "movie_id", name="uix_user_movie"),)
