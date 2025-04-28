@@ -33,7 +33,7 @@ movie_create_schema_example = {
     "certification_id": 1,
     "genres": ["Crime", "Adventure"],
     "stars": ["John Doe", "Jane Doe"],
-    "directors": ["Christopher Nolan"]
+    "directors": ["Christopher Nolan"],
 }
 
 certification_schema_example = {"id": 1, "name": "PG-13"}

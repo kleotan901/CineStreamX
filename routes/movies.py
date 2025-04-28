@@ -11,7 +11,12 @@ from config.dependencies import get_user_id_from_headers
 from crud import get_existing_movie, add_movie
 from crud.movies import get_movie_by_id, get_search_result, get_filter_result
 from database import get_db
-from database.models.movies import MovieModel, MovieLikeModel, CommentModel
+from database.models.movies import (
+    MovieModel,
+    MovieLikeModel,
+    CommentModel,
+    FavoriteMovieModel,
+)
 from schemas.movies import (
     BaseMovieSchema,
     MovieCreateSchema,
@@ -19,24 +24,15 @@ from schemas.movies import (
     MovieListResponseSchema,
     MovieDetailSchema,
     FilterParams,
-    MovieIsLikeScheme,
     CommentInputSchema,
-    CommentSchema,
 )
-from security.interfaces import JWTAuthManagerInterface
+
 
 router = APIRouter()
 MovieFilter = create_filters()
 
 
-@router.get(
-    path="/movies/",
-    response_model=MovieListResponseSchema,
-    summary="All movies",
-    description="Retrieve all movies from DB",
-    status_code=status.HTTP_200_OK,
-)
-async def get_movies_list(
+async def common_parameters(
     sorting_query: FilterParams = Depends(),
     year: Optional[int] = Query(default=None, description="Filtering movies by year"),
     imdb: Optional[float] = Query(default=None, description="Filtering movies by imdb"),
@@ -54,6 +50,29 @@ async def get_movies_list(
     ),
     page: int = Query(1, ge=1, description="Page number (1-based index)"),
     per_page: int = Query(10, ge=1, le=20, description="Number of items per page"),
+):
+    return {
+        "sorting_query": sorting_query,
+        "year": year,
+        "imdb": imdb,
+        "filter_by_genre": filter_by_genre,
+        "search_by_name_or_description": search_by_name_or_description,
+        "search_by_star": search_by_star,
+        "search_by_director": search_by_director,
+        "page": page,
+        "per_page": per_page,
+    }
+
+
+@router.get(
+    path="/movies/",
+    response_model=MovieListResponseSchema,
+    summary="All movies",
+    description="Retrieve all movies from DB",
+    status_code=status.HTTP_200_OK,
+)
+async def get_movies_list(
+    commons: Annotated[dict, Depends(common_parameters)],
     db: AsyncSession = Depends(get_db),
 ) -> MovieListResponseSchema:
     count_stmt = select(func.count(MovieModel.id))
@@ -66,8 +85,10 @@ async def get_movies_list(
 
     filters_lst = []
     # ✅ filtering by year, imdb, genres
-    if year or imdb or filter_by_genre:
-        filters_result = await get_filter_result(year, imdb, filter_by_genre, db)
+    if commons["year"] or commons["imdb"] or commons["filter_by_genre"]:
+        filters_result = await get_filter_result(
+            commons["year"], commons["imdb"], commons["filter_by_genre"], db
+        )
         if filters_result:
             filters_lst.extend(filters_result)
         else:
@@ -76,9 +97,16 @@ async def get_movies_list(
             )
 
     # ✅ searching
-    if search_by_name_or_description or search_by_star or search_by_director:
+    if (
+        commons["search_by_name_or_description"]
+        or commons["search_by_star"]
+        or commons["search_by_director"]
+    ):
         search_result = await get_search_result(
-            search_by_name_or_description, search_by_star, search_by_director, db
+            commons["search_by_name_or_description"],
+            commons["search_by_star"],
+            commons["search_by_director"],
+            db,
         )
         if search_result:
             filters_lst.extend(search_result)
@@ -89,8 +117,8 @@ async def get_movies_list(
         stmt = stmt.where(*filters_lst)
 
     # ✅ sorting based on sorting_query.sorted_by or default ordering
-    if sorting_query and sorting_query.sorted_by:
-        sort_column = getattr(MovieModel, sorting_query.sorted_by, None)
+    if commons["sorting_query"] and commons["sorting_query"].sorted_by:
+        sort_column = getattr(MovieModel, commons["sorting_query"].sorted_by, None)
         if sort_column is not None:
             stmt = stmt.order_by(sort_column)
     else:
@@ -98,8 +126,8 @@ async def get_movies_list(
         stmt = stmt.order_by(*order_by)
 
     # Pagination
-    offset = (page - 1) * per_page
-    stmt = stmt.offset(offset).limit(per_page)
+    offset = (commons["page"] - 1) * commons["per_page"]
+    stmt = stmt.offset(offset).limit(commons["per_page"])
 
     result_movies = await db.execute(stmt)
     movies = result_movies.scalars().all()
@@ -108,17 +136,17 @@ async def get_movies_list(
 
     movie_list = [BaseMovieSchema.model_validate(movie) for movie in movies]
 
-    total_pages = math.ceil(total_items / per_page)
+    total_pages = math.ceil(total_items / commons["per_page"])
     response = MovieListResponseSchema(
         movies=movie_list,
         prev_page=(
-            f"/theater/movies/?page={page - 1}&per_page={per_page}"
-            if page > 1
+            f"/theater/movies/?page={commons["page"] - 1}&per_page={commons["per_page"]}"
+            if commons["page"] > 1
             else None
         ),
         next_page=(
-            f"/theater/movies/?page={page + 1}&per_page={per_page}"
-            if page < total_pages
+            f"/theater/movies/?page={commons["page"] + 1}&per_page={commons["per_page"]}"
+            if commons["page"] < total_pages
             else None
         ),
         total_pages=total_pages,
@@ -168,6 +196,174 @@ async def create_movie(
     await add_movie(movies_data, db)
 
     return MessageSchema.model_validate({"message": "Movie was created successfully!"})
+
+
+@router.get(
+    path="/movies/favorites/",
+    response_model=MovieListResponseSchema,
+    summary="All favorite movies of authorized user",
+    description="Retrieve all favorite movies of authorized user from DB",
+    status_code=status.HTTP_200_OK,
+)
+async def get_favorite_movies_list(
+    commons: Annotated[dict, Depends(common_parameters)],
+    user_id: int = Depends(get_user_id_from_headers),
+    db: AsyncSession = Depends(get_db),
+) -> MovieListResponseSchema:
+    stmt_favorites = (
+        select(MovieModel)
+        .join(FavoriteMovieModel, FavoriteMovieModel.movie_id == MovieModel.id)
+        .where(FavoriteMovieModel.user_id == user_id)
+    )
+
+    filters_lst = []
+    # ✅ filtering by year, imdb, genres
+    if commons["year"] or commons["imdb"] or commons["filter_by_genre"]:
+        filters_result = await get_filter_result(
+            commons["year"], commons["imdb"], commons["filter_by_genre"], db
+        )
+        if filters_result:
+            filters_lst.extend(filters_result)
+        else:
+            raise HTTPException(
+                status_code=404, detail="No movies found for the selected filter."
+            )
+
+    # ✅ searching
+    if (
+        commons["search_by_name_or_description"]
+        or commons["search_by_star"]
+        or commons["search_by_director"]
+    ):
+        search_result = await get_search_result(
+            commons["search_by_name_or_description"],
+            commons["search_by_star"],
+            commons["search_by_director"],
+            db,
+        )
+        if search_result:
+            filters_lst.extend(search_result)
+        else:
+            raise HTTPException(status_code=404, detail="No searching result.")
+
+    if filters_lst:
+        stmt_favorites = stmt_favorites.where(*filters_lst)
+
+    # ✅ sorting based on sorting_query.sorted_by or default ordering
+    if commons["sorting_query"] and commons["sorting_query"].sorted_by:
+        sort_column = getattr(MovieModel, commons["sorting_query"].sorted_by, None)
+        if sort_column is not None:
+            stmt_favorites = stmt_favorites.order_by(sort_column)
+    else:
+        order_by = MovieModel.default_order_by()
+        stmt_favorites = stmt_favorites.order_by(*order_by)
+
+    # Pagination
+    offset = (commons["page"] - 1) * commons["per_page"]
+    stmt_favorites = stmt_favorites.offset(offset).limit(commons["per_page"])
+
+    result_movies = await db.execute(stmt_favorites)
+    movies = result_movies.scalars().all()
+    if not movies:
+        raise HTTPException(status_code=404, detail="No movies in favorites.")
+    total_items = len(movies)
+
+    movie_list = [BaseMovieSchema.model_validate(movie) for movie in movies]
+
+    total_pages = math.ceil(total_items / commons["per_page"])
+    response = MovieListResponseSchema(
+        movies=movie_list,
+        prev_page=(
+            f"/theater/movies/?page={commons["page"] - 1}&per_page={commons["per_page"]}"
+            if commons["page"] > 1
+            else None
+        ),
+        next_page=(
+            f"/theater/movies/?page={commons["page"] + 1}&per_page={commons["per_page"]}"
+            if commons["page"] < total_pages
+            else None
+        ),
+        total_pages=total_pages,
+        total_items=total_items,
+    )
+    return response
+
+
+@router.post(
+    path="/movies/add-to-favorite/",
+    response_model=MessageSchema,
+    summary="Add movie to favorite.",
+    description="Add movie to favorite.",
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_movie_to_favorites(
+    movie_id: int,
+    user_id: int = Depends(get_user_id_from_headers),
+    db: AsyncSession = Depends(get_db),
+) -> MessageSchema:
+    movie = await get_movie_by_id(movie_id, db)
+    if not movie:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Movie with id not found."
+        )
+    try:
+        favorite_movie = FavoriteMovieModel(user_id=user_id, movie_id=movie_id)
+        db.add(favorite_movie)
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The movie already in favorites.",
+        )
+
+    return MessageSchema.model_validate(
+        {"message": f"Movie {movie.name} add to favorites!"}
+    )
+
+
+@router.delete(
+    path="/movies/remove-from-favorite/",
+    response_model=MessageSchema,
+    summary="Remove movie from favorite.",
+    description="Remove movie from favorite.",
+    status_code=status.HTTP_200_OK,
+)
+async def remove_from_favorites(
+    movie_id: int,
+    user_id: int = Depends(get_user_id_from_headers),
+    db: AsyncSession = Depends(get_db),
+) -> MessageSchema:
+    movie = await get_movie_by_id(movie_id, db)
+    if not movie:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Movie with id not found."
+        )
+    try:
+        result = await db.execute(
+            select(FavoriteMovieModel).where(
+                FavoriteMovieModel.movie_id == movie_id,
+                FavoriteMovieModel.user_id == user_id,
+            )
+        )
+        db_favorite_movie = result.scalar_one_or_none()
+        if not db_favorite_movie:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This movie is not in favorites.",
+            )
+        await db.delete(db_favorite_movie)
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The movie is not in favorites.",
+        )
+
+    return MessageSchema.model_validate(
+        {"message": f"Movie {movie.name} was removed from favorites!"}
+    )
 
 
 @router.get(
