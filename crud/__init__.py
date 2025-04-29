@@ -7,6 +7,10 @@ from .accounts import (
 )
 
 from .movies import (
+    get_movie_by_id,
     get_existing_movie,
-    add_movie
+    add_movie,
+    get_search_result,
+    get_filter_result,
+    get_genre_by_id
 )

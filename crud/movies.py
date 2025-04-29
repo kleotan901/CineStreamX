@@ -15,6 +15,18 @@ from database.models.movies import (
 )
 
 
+async def get_genre_by_id(genre_id, db):
+    stmt_genre = select(GenreModel).where(GenreModel.id == genre_id)
+    result = await db.execute(stmt_genre)
+    genre = result.scalars().first()
+    if not genre:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"The genre with ID '{genre_id}' not found in DB.",
+        )
+    return genre
+
+
 async def get_existing_movie(movie_data, db):
     stmt = select(MovieModel).where(
         MovieModel.name == movie_data.name,
@@ -27,7 +39,7 @@ async def get_existing_movie(movie_data, db):
 
 
 async def get_or_create_item(
-        movies_data_items: List[str], model: Type[Any], db: AsyncSession = Depends(get_db)
+    movies_data_items: List[str], model: Type[Any], db: AsyncSession = Depends(get_db)
 ):
     items = []
     for item_name in movies_data_items:
@@ -111,11 +123,16 @@ async def get_movie_by_id(movie_id, db):
     )
     result = await db.execute(stmt)
     movie = result.scalars().first()
+    if not movie:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Movie with id '{movie_id}' not found.",
+        )
     return movie
 
 
 async def get_search_result(
-        search_by_name_or_description, search_by_star, search_by_director, db
+    search_by_name_or_description, search_by_star, search_by_director, db
 ):
     search_result_lst = []
 

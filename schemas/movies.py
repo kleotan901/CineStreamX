@@ -156,3 +156,14 @@ class MoviesCountByGenreSchema(BaseModel):
 
 class GenreListSchema(BaseModel):
     genres: List[MoviesCountByGenreSchema] = None
+
+
+class MoviesByGenreSchema(BaseModel):
+    id: int
+    genre_name: str
+    movie_count: int
+    movies: List[BaseMovieSchema] = None
+
+    model_config = {
+        "from_attributes": True,
+    }
