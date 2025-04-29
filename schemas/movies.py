@@ -138,7 +138,7 @@ class MovieDetailSchema(BaseMovieSchema):
     }
 
 
-class MovieIsLikeScheme(BaseModel):
+class MovieIsLikeSchema(BaseModel):
     movie_id: int
     user_id: int
     is_like: bool
@@ -146,3 +146,13 @@ class MovieIsLikeScheme(BaseModel):
     model_config = {
         "from_attributes": True,
     }
+
+
+class MoviesCountByGenreSchema(BaseModel):
+    id: int
+    genre_name: str
+    movie_count: int
+
+
+class GenreListSchema(BaseModel):
+    genres: List[MoviesCountByGenreSchema] = None

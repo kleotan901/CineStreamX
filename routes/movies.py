@@ -15,7 +15,7 @@ from database.models.movies import (
     MovieModel,
     MovieLikeModel,
     CommentModel,
-    FavoriteMovieModel,
+    FavoriteMovieModel, GenreModel, MoviesGenresModel,
 )
 from schemas.movies import (
     BaseMovieSchema,
@@ -25,31 +25,31 @@ from schemas.movies import (
     MovieDetailSchema,
     FilterParams,
     CommentInputSchema,
+    GenreListSchema, MoviesCountByGenreSchema
 )
-
 
 router = APIRouter()
 MovieFilter = create_filters()
 
 
 async def common_parameters(
-    sorting_query: FilterParams = Depends(),
-    year: Optional[int] = Query(default=None, description="Filtering movies by year"),
-    imdb: Optional[float] = Query(default=None, description="Filtering movies by imdb"),
-    filter_by_genre: Optional[str] = Query(
-        default=None, description="Filtering movies by genre"
-    ),
-    search_by_name_or_description: Optional[str] = Query(
-        default=None, description="Search movies by name or description"
-    ),
-    search_by_star: Optional[str] = Query(
-        default=None, description="Search movies by star"
-    ),
-    search_by_director: Optional[str] = Query(
-        default=None, description="Search movies by director"
-    ),
-    page: int = Query(1, ge=1, description="Page number (1-based index)"),
-    per_page: int = Query(10, ge=1, le=20, description="Number of items per page"),
+        sorting_query: FilterParams = Depends(),
+        year: Optional[int] = Query(default=None, description="Filtering movies by year"),
+        imdb: Optional[float] = Query(default=None, description="Filtering movies by imdb"),
+        filter_by_genre: Optional[str] = Query(
+            default=None, description="Filtering movies by genre"
+        ),
+        search_by_name_or_description: Optional[str] = Query(
+            default=None, description="Search movies by name or description"
+        ),
+        search_by_star: Optional[str] = Query(
+            default=None, description="Search movies by star"
+        ),
+        search_by_director: Optional[str] = Query(
+            default=None, description="Search movies by director"
+        ),
+        page: int = Query(1, ge=1, description="Page number (1-based index)"),
+        per_page: int = Query(10, ge=1, le=20, description="Number of items per page"),
 ):
     return {
         "sorting_query": sorting_query,
@@ -72,8 +72,8 @@ async def common_parameters(
     status_code=status.HTTP_200_OK,
 )
 async def get_movies_list(
-    commons: Annotated[dict, Depends(common_parameters)],
-    db: AsyncSession = Depends(get_db),
+        commons: Annotated[dict, Depends(common_parameters)],
+        db: AsyncSession = Depends(get_db),
 ) -> MovieListResponseSchema:
     count_stmt = select(func.count(MovieModel.id))
     result_count = await db.execute(count_stmt)
@@ -98,9 +98,9 @@ async def get_movies_list(
 
     # ✅ searching
     if (
-        commons["search_by_name_or_description"]
-        or commons["search_by_star"]
-        or commons["search_by_director"]
+            commons["search_by_name_or_description"]
+            or commons["search_by_star"]
+            or commons["search_by_director"]
     ):
         search_result = await get_search_result(
             commons["search_by_name_or_description"],
@@ -155,6 +155,38 @@ async def get_movies_list(
     return response
 
 
+@router.get(
+    path="/genres/",
+    response_model=GenreListSchema,
+    summary="A list of genres with the count of movies in each.",
+    description="View a list of genres with the count of movies in each. "
+                "Clicking on a genre shows all related movies.",
+    status_code=status.HTTP_200_OK,
+)
+async def get_genres_with_movie_count(
+        db: AsyncSession = Depends(get_db),
+) -> GenreListSchema:
+    stmt = (
+        select(
+            GenreModel.id,
+            GenreModel.name,
+            func.count(MovieModel.id).label("movie_count")
+        )
+        .join(MoviesGenresModel, GenreModel.id == MoviesGenresModel.c.genre_id)
+        .join(MovieModel, MoviesGenresModel.c.movie_id == MovieModel.id)
+        .group_by(GenreModel.id)
+    )
+    result_genre = await db.execute(stmt)
+    genres_data = result_genre.all()
+
+    genres = [
+        MoviesCountByGenreSchema(id=id_, genre_name=name, movie_count=movie_count)
+        for id_, name, movie_count in genres_data
+    ]
+
+    return GenreListSchema(genres=genres)
+
+
 @router.post(
     path="/movies/",
     response_model=MessageSchema,
@@ -183,14 +215,14 @@ async def get_movies_list(
     },
 )
 async def create_movie(
-    movies_data: MovieCreateSchema, db: AsyncSession = Depends(get_db)
+        movies_data: MovieCreateSchema, db: AsyncSession = Depends(get_db)
 ) -> MessageSchema:
     existing_movie = await get_existing_movie(movies_data, db)
     if existing_movie:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"The movie '{movies_data.name}' ({movies_data.year}), "
-            f"with a duration of {movies_data.time} minutes, already exists in the database.",
+                   f"with a duration of {movies_data.time} minutes, already exists in the database.",
         )
 
     await add_movie(movies_data, db)
@@ -206,9 +238,9 @@ async def create_movie(
     status_code=status.HTTP_200_OK,
 )
 async def get_favorite_movies_list(
-    commons: Annotated[dict, Depends(common_parameters)],
-    user_id: int = Depends(get_user_id_from_headers),
-    db: AsyncSession = Depends(get_db),
+        commons: Annotated[dict, Depends(common_parameters)],
+        user_id: int = Depends(get_user_id_from_headers),
+        db: AsyncSession = Depends(get_db),
 ) -> MovieListResponseSchema:
     stmt_favorites = (
         select(MovieModel)
@@ -231,9 +263,9 @@ async def get_favorite_movies_list(
 
     # ✅ searching
     if (
-        commons["search_by_name_or_description"]
-        or commons["search_by_star"]
-        or commons["search_by_director"]
+            commons["search_by_name_or_description"]
+            or commons["search_by_star"]
+            or commons["search_by_director"]
     ):
         search_result = await get_search_result(
             commons["search_by_name_or_description"],
@@ -297,9 +329,9 @@ async def get_favorite_movies_list(
     status_code=status.HTTP_201_CREATED,
 )
 async def add_movie_to_favorites(
-    movie_id: int,
-    user_id: int = Depends(get_user_id_from_headers),
-    db: AsyncSession = Depends(get_db),
+        movie_id: int,
+        user_id: int = Depends(get_user_id_from_headers),
+        db: AsyncSession = Depends(get_db),
 ) -> MessageSchema:
     movie = await get_movie_by_id(movie_id, db)
     if not movie:
@@ -330,9 +362,9 @@ async def add_movie_to_favorites(
     status_code=status.HTTP_200_OK,
 )
 async def remove_from_favorites(
-    movie_id: int,
-    user_id: int = Depends(get_user_id_from_headers),
-    db: AsyncSession = Depends(get_db),
+        movie_id: int,
+        user_id: int = Depends(get_user_id_from_headers),
+        db: AsyncSession = Depends(get_db),
 ) -> MessageSchema:
     movie = await get_movie_by_id(movie_id, db)
     if not movie:
@@ -388,7 +420,7 @@ async def remove_from_favorites(
     },
 )
 async def movie_detail(
-    movie_id: int, db: AsyncSession = Depends(get_db)
+        movie_id: int, db: AsyncSession = Depends(get_db)
 ) -> MovieDetailSchema:
     movie = await get_movie_by_id(movie_id, db)
     if not movie:
@@ -407,10 +439,10 @@ async def movie_detail(
     status_code=status.HTTP_200_OK,
 )
 async def movie_like(
-    movie_id: int,
-    input_is_like: bool = None,
-    user_id: int = Depends(get_user_id_from_headers),
-    db: AsyncSession = Depends(get_db),
+        movie_id: int,
+        input_is_like: bool = None,
+        user_id: int = Depends(get_user_id_from_headers),
+        db: AsyncSession = Depends(get_db),
 ) -> MovieDetailSchema:
     movie = await get_movie_by_id(movie_id, db)
     if not movie:
@@ -479,10 +511,10 @@ async def movie_like(
     status_code=status.HTTP_201_CREATED,
 )
 async def create_comment(
-    movie_id: int,
-    comment_data: CommentInputSchema,
-    user_id: int = Depends(get_user_id_from_headers),
-    db: AsyncSession = Depends(get_db),
+        movie_id: int,
+        comment_data: CommentInputSchema,
+        user_id: int = Depends(get_user_id_from_headers),
+        db: AsyncSession = Depends(get_db),
 ) -> MessageSchema:
     movie = await get_movie_by_id(movie_id, db)
     if not movie:

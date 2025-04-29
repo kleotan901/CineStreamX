@@ -27,7 +27,7 @@ async def get_existing_movie(movie_data, db):
 
 
 async def get_or_create_item(
-    movies_data_items: List[str], model: Type[Any], db: AsyncSession = Depends(get_db)
+        movies_data_items: List[str], model: Type[Any], db: AsyncSession = Depends(get_db)
 ):
     items = []
     for item_name in movies_data_items:
@@ -69,23 +69,31 @@ async def add_movie(movies_data, db):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An error occurred during user creation. {str(error)}",
         )
-    new_movie = MovieModel(
-        name=movies_data.name,
-        year=movies_data.year,
-        time=movies_data.time,
-        imdb=movies_data.imdb,
-        votes=movies_data.votes,
-        meta_score=movies_data.meta_score,
-        gross=movies_data.gross,
-        description=movies_data.description,
-        price=movies_data.price,
-        certification_id=certification.id,
-        genres=genres,
-        stars=stars,
-        directors=directors,
-    )
-    db.add(new_movie)
-    await db.commit()
+
+    try:
+        new_movie = MovieModel(
+            name=movies_data.name,
+            year=movies_data.year,
+            time=movies_data.time,
+            imdb=movies_data.imdb,
+            votes=movies_data.votes,
+            meta_score=movies_data.meta_score,
+            gross=movies_data.gross,
+            description=movies_data.description,
+            price=movies_data.price,
+            certification_id=certification.id,
+            genres=genres,
+            stars=stars,
+            directors=directors,
+        )
+        db.add(new_movie)
+        await db.commit()
+    except Exception as error:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An error occurred during user creation. {str(error)}",
+        )
+
     await db.refresh(new_movie)
     return new_movie
 
@@ -107,7 +115,7 @@ async def get_movie_by_id(movie_id, db):
 
 
 async def get_search_result(
-    search_by_name_or_description, search_by_star, search_by_director, db
+        search_by_name_or_description, search_by_star, search_by_director, db
 ):
     search_result_lst = []
 
