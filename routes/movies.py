@@ -17,7 +17,12 @@ from crud import (
     get_search_result,
     get_filter_result,
     get_genre_by_id,
+    add_genre,
+    update_star_by_id,
+    delete_genre_by_id,
+    add_star,
 )
+from crud.movies import update_genre_by_id, delete_star_by_id
 
 from database import get_db
 from database.models.movies import (
@@ -27,6 +32,7 @@ from database.models.movies import (
     FavoriteMovieModel,
     GenreModel,
     MoviesGenresModel,
+    StarModel,
 )
 from schemas.movies import (
     BaseMovieSchema,
@@ -40,6 +46,11 @@ from schemas.movies import (
     MoviesCountByGenreSchema,
     MoviesByGenreSchema,
     MovieUpdateSchema,
+    GenreCreateSchema,
+    GenreSchema,
+    StarListSchema,
+    StarCreateSchema,
+    StarSchema,
 )
 
 router = APIRouter()
@@ -47,23 +58,23 @@ MovieFilter = create_filters()
 
 
 async def common_parameters(
-        sorting_query: FilterParams = Depends(),
-        year: Optional[int] = Query(default=None, description="Filtering movies by year"),
-        imdb: Optional[float] = Query(default=None, description="Filtering movies by imdb"),
-        filter_by_genre: Optional[str] = Query(
-            default=None, description="Filtering movies by genre"
-        ),
-        search_by_name_or_description: Optional[str] = Query(
-            default=None, description="Search movies by name or description"
-        ),
-        search_by_star: Optional[str] = Query(
-            default=None, description="Search movies by star"
-        ),
-        search_by_director: Optional[str] = Query(
-            default=None, description="Search movies by director"
-        ),
-        page: int = Query(1, ge=1, description="Page number (1-based index)"),
-        per_page: int = Query(10, ge=1, le=20, description="Number of items per page"),
+    sorting_query: FilterParams = Depends(),
+    year: Optional[int] = Query(default=None, description="Filtering movies by year"),
+    imdb: Optional[float] = Query(default=None, description="Filtering movies by imdb"),
+    filter_by_genre: Optional[str] = Query(
+        default=None, description="Filtering movies by genre"
+    ),
+    search_by_name_or_description: Optional[str] = Query(
+        default=None, description="Search movies by name or description"
+    ),
+    search_by_star: Optional[str] = Query(
+        default=None, description="Search movies by star"
+    ),
+    search_by_director: Optional[str] = Query(
+        default=None, description="Search movies by director"
+    ),
+    page: int = Query(1, ge=1, description="Page number (1-based index)"),
+    per_page: int = Query(10, ge=1, le=20, description="Number of items per page"),
 ):
     return {
         "sorting_query": sorting_query,
@@ -86,8 +97,8 @@ async def common_parameters(
     status_code=status.HTTP_200_OK,
 )
 async def get_movies_list(
-        commons: Annotated[dict, Depends(common_parameters)],
-        db: AsyncSession = Depends(get_db),
+    commons: Annotated[dict, Depends(common_parameters)],
+    db: AsyncSession = Depends(get_db),
 ) -> MovieListResponseSchema:
     count_stmt = select(func.count(MovieModel.id))
     result_count = await db.execute(count_stmt)
@@ -112,9 +123,9 @@ async def get_movies_list(
 
     # ✅ searching
     if (
-            commons["search_by_name_or_description"]
-            or commons["search_by_star"]
-            or commons["search_by_director"]
+        commons["search_by_name_or_description"]
+        or commons["search_by_star"]
+        or commons["search_by_director"]
     ):
         search_result = await get_search_result(
             commons["search_by_name_or_description"],
@@ -170,39 +181,6 @@ async def get_movies_list(
 
 
 @router.get(
-    path="/genres/",
-    response_model=GenreListSchema,
-    summary="A list of genres with the count of movies in each.",
-    description="View a list of genres with the count of movies in each. "
-                "Clicking on a genre shows all related movies.",
-    status_code=status.HTTP_200_OK,
-)
-async def get_genres_with_movie_count(
-        db: AsyncSession = Depends(get_db),
-) -> GenreListSchema:
-    stmt = (
-        select(
-            GenreModel.id,
-            GenreModel.name,
-            func.count(MovieModel.id).label("movie_count"),
-        )
-        .join(MoviesGenresModel, GenreModel.id == MoviesGenresModel.c.genre_id)
-        .join(MovieModel, MoviesGenresModel.c.movie_id == MovieModel.id)
-        .group_by(GenreModel.id)
-        .order_by(GenreModel.name)
-    )
-    result_genre = await db.execute(stmt)
-    genres_data = result_genre.all()
-
-    genres = [
-        MoviesCountByGenreSchema(id=id_, genre_name=name, movie_count=movie_count)
-        for id_, name, movie_count in genres_data
-    ]
-
-    return GenreListSchema(genres=genres)
-
-
-@router.get(
     path="/movies-by-genre/{genre_id}/",
     response_model=MoviesByGenreSchema,
     summary="A list of movies by genre_id.",
@@ -210,7 +188,7 @@ async def get_genres_with_movie_count(
     status_code=status.HTTP_200_OK,
 )
 async def get_movies_by_genre(
-        genre_id: int, db: AsyncSession = Depends(get_db)
+    genre_id: int, db: AsyncSession = Depends(get_db)
 ) -> MoviesByGenreSchema:
     genre = await get_genre_by_id(genre_id, db)
 
@@ -258,14 +236,14 @@ async def get_movies_by_genre(
     },
 )
 async def create_movie(
-        movies_data: MovieCreateSchema, db: AsyncSession = Depends(get_db)
+    movies_data: MovieCreateSchema, db: AsyncSession = Depends(get_db)
 ) -> MessageSchema:
     existing_movie = await get_existing_movie(movies_data, db)
     if existing_movie:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"The movie '{movies_data.name}' ({movies_data.year}), "
-                   f"with a duration of {movies_data.time} minutes, already exists in the database.",
+            f"with a duration of {movies_data.time} minutes, already exists in the database.",
         )
 
     await add_movie(movies_data, db)
@@ -281,9 +259,9 @@ async def create_movie(
     status_code=status.HTTP_200_OK,
 )
 async def get_favorite_movies_list(
-        commons: Annotated[dict, Depends(common_parameters)],
-        user_id: int = Depends(get_user_id_from_headers),
-        db: AsyncSession = Depends(get_db),
+    commons: Annotated[dict, Depends(common_parameters)],
+    user_id: int = Depends(get_user_id_from_headers),
+    db: AsyncSession = Depends(get_db),
 ) -> MovieListResponseSchema:
     stmt_favorites = (
         select(MovieModel)
@@ -306,9 +284,9 @@ async def get_favorite_movies_list(
 
     # ✅ searching
     if (
-            commons["search_by_name_or_description"]
-            or commons["search_by_star"]
-            or commons["search_by_director"]
+        commons["search_by_name_or_description"]
+        or commons["search_by_star"]
+        or commons["search_by_director"]
     ):
         search_result = await get_search_result(
             commons["search_by_name_or_description"],
@@ -372,9 +350,9 @@ async def get_favorite_movies_list(
     status_code=status.HTTP_201_CREATED,
 )
 async def add_movie_to_favorites(
-        movie_id: int,
-        user_id: int = Depends(get_user_id_from_headers),
-        db: AsyncSession = Depends(get_db),
+    movie_id: int,
+    user_id: int = Depends(get_user_id_from_headers),
+    db: AsyncSession = Depends(get_db),
 ) -> MessageSchema:
     movie = await get_movie_by_id(movie_id, db)
     try:
@@ -401,9 +379,9 @@ async def add_movie_to_favorites(
     status_code=status.HTTP_200_OK,
 )
 async def remove_from_favorites(
-        movie_id: int,
-        user_id: int = Depends(get_user_id_from_headers),
-        db: AsyncSession = Depends(get_db),
+    movie_id: int,
+    user_id: int = Depends(get_user_id_from_headers),
+    db: AsyncSession = Depends(get_db),
 ) -> MessageSchema:
     movie = await get_movie_by_id(movie_id, db)
     try:
@@ -455,7 +433,7 @@ async def remove_from_favorites(
     },
 )
 async def movie_detail(
-        movie_id: int, db: AsyncSession = Depends(get_db)
+    movie_id: int, db: AsyncSession = Depends(get_db)
 ) -> MovieDetailSchema:
     movie = await get_movie_by_id(movie_id, db)
     return MovieDetailSchema.model_validate(movie)
@@ -469,7 +447,7 @@ async def movie_detail(
     status_code=status.HTTP_200_OK,
 )
 async def edit_movie(
-        movie_id: int, movie_data: MovieUpdateSchema, db: AsyncSession = Depends(get_db)
+    movie_id: int, movie_data: MovieUpdateSchema, db: AsyncSession = Depends(get_db)
 ) -> MovieDetailSchema:
     updated_film = await update_movie_by_id(movie_id, movie_data, db)
     return MovieDetailSchema.model_validate(updated_film)
@@ -483,7 +461,7 @@ async def edit_movie(
     status_code=status.HTTP_200_OK,
 )
 async def remove_movie(
-        movie_id: int, db: AsyncSession = Depends(get_db)
+    movie_id: int, db: AsyncSession = Depends(get_db)
 ) -> MessageSchema:
     await delete_movie_by_id(movie_id, db)
     return MessageSchema.model_validate({"message": "Film was deleted!"})
@@ -497,10 +475,10 @@ async def remove_movie(
     status_code=status.HTTP_200_OK,
 )
 async def movie_like(
-        movie_id: int,
-        input_is_like: bool = None,
-        user_id: int = Depends(get_user_id_from_headers),
-        db: AsyncSession = Depends(get_db),
+    movie_id: int,
+    input_is_like: bool = None,
+    user_id: int = Depends(get_user_id_from_headers),
+    db: AsyncSession = Depends(get_db),
 ) -> MovieDetailSchema:
     movie = await get_movie_by_id(movie_id, db)
     stmt = select(MovieLikeModel).where(
@@ -565,10 +543,10 @@ async def movie_like(
     status_code=status.HTTP_201_CREATED,
 )
 async def create_comment(
-        movie_id: int,
-        comment_data: CommentInputSchema,
-        user_id: int = Depends(get_user_id_from_headers),
-        db: AsyncSession = Depends(get_db),
+    movie_id: int,
+    comment_data: CommentInputSchema,
+    user_id: int = Depends(get_user_id_from_headers),
+    db: AsyncSession = Depends(get_db),
 ) -> MessageSchema:
     if not comment_data.comment.strip():
         raise HTTPException(status_code=400, detail="Comment cannot be empty")
@@ -589,4 +567,153 @@ async def create_comment(
 
     return MessageSchema.model_validate(
         {"message": "Comment was created successfully!"}
+    )
+
+
+@router.get(
+    path="/genres/",
+    response_model=GenreListSchema,
+    summary="A list of genres with the count of movies in each.",
+    description="View a list of genres with the count of movies in each. "
+    "Clicking on a genre shows all related movies.",
+    status_code=status.HTTP_200_OK,
+)
+async def get_genres_with_movie_count(
+    db: AsyncSession = Depends(get_db),
+) -> GenreListSchema:
+    stmt = (
+        select(
+            GenreModel.id,
+            GenreModel.name,
+            func.count(MovieModel.id).label("movie_count"),
+        )
+        .join(MoviesGenresModel, GenreModel.id == MoviesGenresModel.c.genre_id)
+        .join(MovieModel, MoviesGenresModel.c.movie_id == MovieModel.id)
+        .group_by(GenreModel.id)
+        .order_by(GenreModel.name)
+    )
+    result_genre = await db.execute(stmt)
+    genres_data = result_genre.all()
+
+    genres = [
+        MoviesCountByGenreSchema(id=id_, genre_name=name, movie_count=movie_count)
+        for id_, name, movie_count in genres_data
+    ]
+
+    return GenreListSchema(genres=genres)
+
+
+@router.post(
+    path="/genres/",
+    response_model=GenreSchema,
+    summary="Create new genre (Authorization of moderator required).",
+    description="Create new genre.",
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_genre(
+    genre_data: GenreCreateSchema,
+    db: AsyncSession = Depends(get_db),
+) -> GenreSchema:
+    genre = await add_genre(genre_data, db)
+    return GenreSchema.model_validate(genre)
+
+
+@router.put(
+    path="/genres/{genre_id}/",
+    response_model=GenreSchema,
+    summary="Update genre (Authorization of moderator required).",
+    description="Update genre.",
+    status_code=status.HTTP_200_OK,
+)
+async def edit_genre(
+    genre_id: int,
+    genre_data: GenreCreateSchema,
+    db: AsyncSession = Depends(get_db),
+) -> GenreSchema:
+    genre = await update_genre_by_id(genre_id, genre_data, db)
+    return GenreSchema.model_validate(genre)
+
+
+@router.delete(
+    path="/genres/delete/{genre_id}/",
+    response_model=MessageSchema,
+    summary="Delete genre (Authorization of moderator required).",
+    description="Delete genre.",
+    status_code=status.HTTP_200_OK,
+)
+async def remove_genre(
+    genre_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> MessageSchema:
+    genre = await delete_genre_by_id(genre_id, db)
+    return MessageSchema.model_validate(
+        {"message": f"The genre '{genre.name}' was deleted!"}
+    )
+
+
+@router.get(
+    path="/stars/",
+    response_model=StarListSchema,
+    summary="A list of actors.",
+    description="Retrieve a list of actors. ",
+    status_code=status.HTTP_200_OK,
+)
+async def get_stars_list(
+    db: AsyncSession = Depends(get_db),
+) -> StarListSchema:
+    stmt = select(StarModel)
+    result = await db.execute(stmt)
+    stars = result.scalars().all()
+    if not stars:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="No actors found."
+        )
+    return StarListSchema(stars=stars)
+
+
+@router.post(
+    path="/stars/",
+    response_model=StarSchema,
+    summary="Create new actor (Authorization of moderator required).",
+    description="Create new actor.",
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_star(
+    star_data: StarCreateSchema,
+    db: AsyncSession = Depends(get_db),
+) -> StarSchema:
+    star = await add_star(star_data, db)
+    return StarSchema.model_validate(star)
+
+
+@router.put(
+    path="/stars/{star_id}/",
+    response_model=StarSchema,
+    summary="Update actor's data (Authorization of moderator required).",
+    description="Update actor's data.",
+    status_code=status.HTTP_200_OK,
+)
+async def edit_star(
+    star_id: int,
+    star_data: StarCreateSchema,
+    db: AsyncSession = Depends(get_db),
+) -> StarSchema:
+    star = await update_star_by_id(star_id, star_data, db)
+    return StarSchema.model_validate(star)
+
+
+@router.delete(
+    path="/stars/delete/{star_id}/",
+    response_model=MessageSchema,
+    summary="Delete actor (Authorization of moderator required).",
+    description="Delete actor.",
+    status_code=status.HTTP_200_OK,
+)
+async def remove_star(
+    star_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> MessageSchema:
+    star = await delete_star_by_id(star_id, db)
+    return MessageSchema.model_validate(
+        {"message": f"The star '{star.name}' was deleted!"}
     )

@@ -74,6 +74,10 @@ class DirectorSchema(BaseModel):
     }
 
 
+class GenreCreateSchema(BaseModel):
+    name: str
+
+
 class GenreSchema(BaseModel):
     id: int
     name: str
@@ -84,6 +88,10 @@ class GenreSchema(BaseModel):
     }
 
 
+class StarCreateSchema(BaseModel):
+    name: str
+
+
 class StarSchema(BaseModel):
     id: int
     name: str
@@ -92,6 +100,10 @@ class StarSchema(BaseModel):
         "from_attributes": True,
         "json_schema_extra": {"examples": [star_schema_example]},
     }
+
+
+class StarListSchema(BaseModel):
+    stars: List[StarSchema] = None
 
 
 class CertificationSchema(BaseModel):

@@ -40,7 +40,7 @@ async def get_existing_movie(movie_data, db):
 
 
 async def get_or_create_item(
-        movies_data_items: List[str], model: Type[Any], db: AsyncSession = Depends(get_db)
+    movies_data_items: List[str], model: Type[Any], db: AsyncSession = Depends(get_db)
 ):
     items = []
     for item_name in movies_data_items:
@@ -186,7 +186,7 @@ async def delete_movie_by_id(movie_id, db):
 
 
 async def get_search_result(
-        search_by_name_or_description, search_by_star, search_by_director, db
+    search_by_name_or_description, search_by_star, search_by_director, db
 ):
     search_result_lst = []
 
@@ -256,3 +256,95 @@ async def get_filter_result(year, imdb, filter_by_genre, db):
             )
 
     return filters
+
+
+async def add_genre(genre_data, db):
+    try:
+        new_genre = GenreModel(name=genre_data.name)
+        db.add(new_genre)
+        await db.commit()
+    except IntegrityError as error:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"The genre '{genre_data.name}' already exist in DB.",
+        )
+    db.refresh(new_genre)
+    return new_genre
+
+
+async def update_genre_by_id(genre_id, genre_data, db):
+    db_genre = await get_genre_by_id(genre_id, db)
+    try:
+        db_genre.name = genre_data.name
+        await db.commit()
+    except IntegrityError as error:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"The genre '{genre_data.name}' already exist in DB.",
+        )
+    db.refresh(db_genre)
+    return db_genre
+
+
+async def delete_genre_by_id(genre_id, db):
+    db_genre = await get_genre_by_id(genre_id, db)
+    try:
+        await db.delete(db_genre)
+        await db.commit()
+    except IntegrityError as error:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"An error occurred during deletion genre - {str(error)}",
+        )
+    return db_genre
+
+
+async def add_star(star_data, db):
+    try:
+        new_star = StarModel(name=star_data.name)
+        db.add(new_star)
+        await db.commit()
+    except IntegrityError as error:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"The star with name - '{star_data.name}' already exists in DB.",
+        )
+    db.refresh(new_star)
+    return new_star
+
+
+async def update_star_by_id(star_id, star_data, db):
+    stmt = select(StarModel).where(StarModel.id == star_id)
+    result = await db.execute(stmt)
+    db_star = result.scalars().first()
+    try:
+        db_star.name = star_data.name
+        await db.commit()
+    except IntegrityError as error:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"The star with name - '{star_data.name}' already exists in DB.",
+        )
+    db.refresh(db_star)
+    return db_star
+
+
+async def delete_star_by_id(star_id, db):
+    stmt = select(StarModel).where(StarModel.id == star_id)
+    result = await db.execute(stmt)
+    db_star = result.scalars().first()
+    try:
+        await db.delete(db_star)
+        await db.commit()
+    except IntegrityError as error:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"An error occurred during deletion star - {str(error)}",
+        )
+    return db_star

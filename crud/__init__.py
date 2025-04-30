@@ -14,5 +14,11 @@ from .movies import (
     delete_movie_by_id,
     get_search_result,
     get_filter_result,
-    get_genre_by_id
+    get_genre_by_id,
+    add_genre,
+    update_star_by_id,
+    delete_genre_by_id,
+    add_star,
+    update_star_by_id,
+    delete_star_by_id
 )
