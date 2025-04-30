@@ -124,6 +124,7 @@ class CommentInputSchema(BaseModel):
 
 class MovieDetailSchema(BaseMovieSchema):
     id: int
+    certification_id: int
     likes_count: int
     dislikes_count: int
     comments: List[CommentSchema] = None
@@ -136,6 +137,17 @@ class MovieDetailSchema(BaseMovieSchema):
         "from_attributes": True,
         "json_schema_extra": {"examples": [movie_detail_schema_example]},
     }
+
+
+class MovieUpdateSchema(BaseMovieSchema):
+    id: int
+    certification_id: int
+
+    genres: Optional[List[str]] = None
+    stars: Optional[List[str]] = None
+    directors: Optional[List[str]] = None
+
+    model_config = {"from_attributes": True}
 
 
 class MovieIsLikeSchema(BaseModel):

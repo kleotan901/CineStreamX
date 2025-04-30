@@ -2,6 +2,7 @@ from typing import List, Type, Any, Optional
 
 from fastapi import Depends, HTTPException, status, Query
 from sqlalchemy import select, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
@@ -39,7 +40,7 @@ async def get_existing_movie(movie_data, db):
 
 
 async def get_or_create_item(
-    movies_data_items: List[str], model: Type[Any], db: AsyncSession = Depends(get_db)
+        movies_data_items: List[str], model: Type[Any], db: AsyncSession = Depends(get_db)
 ):
     items = []
     for item_name in movies_data_items:
@@ -79,7 +80,7 @@ async def add_movie(movies_data, db):
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An error occurred during user creation. {str(error)}",
+            detail=f"An error occurred during genres, stars or directors creation. {str(error)}",
         )
 
     try:
@@ -103,7 +104,7 @@ async def add_movie(movies_data, db):
     except Exception as error:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An error occurred during user creation. {str(error)}",
+            detail=f"An error occurred during movie creation. {str(error)}",
         )
 
     await db.refresh(new_movie)
@@ -131,8 +132,61 @@ async def get_movie_by_id(movie_id, db):
     return movie
 
 
+async def update_movie_by_id(movie_id, movies_data, db):
+    db_film = await get_movie_by_id(movie_id=movie_id, db=db)
+    try:
+        db_film.name = movies_data.name
+        db_film.year = movies_data.year
+        db_film.time = movies_data.time
+        db_film.imdb = movies_data.imdb
+        db_film.votes = movies_data.votes
+        db_film.meta_score = movies_data.meta_score
+        db_film.gross = movies_data.gross
+        db_film.description = movies_data.description
+        db_film.price = movies_data.price
+        db_film.certification_id = movies_data.certification_id
+        try:
+            if movies_data.genres:
+                genres = await get_or_create_item(movies_data.genres, GenreModel, db)
+            if movies_data.stars:
+                stars = await get_or_create_item(movies_data.stars, StarModel, db)
+            if movies_data.directors:
+                directors = await get_or_create_item(
+                    movies_data.directors, DirectorModel, db
+                )
+        except Exception as error:
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"An error occurred during genres, stars or directors updating. {str(error)}",
+            )
+
+        db_film.genres = genres
+        db_film.stars = stars
+        db_film.directors = directors
+
+        await db.commit()
+        await db.refresh(db_film)
+
+    except IntegrityError as error:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An error occurred during movie updating. {str(error)}",
+        )
+
+    return db_film
+
+
+async def delete_movie_by_id(movie_id, db):
+    db_film = await get_movie_by_id(movie_id=movie_id, db=db)
+    await db.delete(db_film)
+    await db.commit()
+    return db_film
+
+
 async def get_search_result(
-    search_by_name_or_description, search_by_star, search_by_director, db
+        search_by_name_or_description, search_by_star, search_by_director, db
 ):
     search_result_lst = []
 
