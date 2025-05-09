@@ -167,8 +167,7 @@ async def test_update_genre_by_moderator(db_session, seed_genres):
     Test that a moderator can edit successfully a genre.
     Steps:
         - override require_moderator function
-        - send POST request to /genre/ to create genre in DB with mock moderator's credentials
-        - send PUT request to /genres/1/ endpoint to update name of genre from 'Genre-2' to 'Comedy'
+        - send PUT request to /genres/3/ endpoint to update name of genre from 'Genre-2' to 'Comedy'
     """
     app.dependency_overrides[require_moderator] = override_require_moderator
 
