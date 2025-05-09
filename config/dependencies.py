@@ -158,6 +158,8 @@ async def require_moderator(
     Returns:
         UserGroupModel: The moderator group object if access is granted.
     """
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     try:
         payload = jwt_manager.decode_access_token(token)
         if payload is None:

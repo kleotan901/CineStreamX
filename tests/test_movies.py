@@ -4,6 +4,7 @@ import pytest
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy import select, func
 
+from config.dependencies import require_moderator
 from database import UserModel
 from database.models.movies import (
     CertificationModel,
@@ -14,6 +15,10 @@ from database.models.movies import (
     CommentModel,
 )
 from main import app
+from tests.helper import (
+    override_require_moderator,
+    override_require_moderator_with_exception,
+)
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -34,6 +39,8 @@ async def create_movie_in_db(
     stars: list[str] = ["John Doe", "Mike Doe"],
     directors: list[str] = ["Christopher Nolan"],
 ):
+    app.dependency_overrides[require_moderator] = override_require_moderator
+
     payload = {
         "name": name,
         "year": year,
@@ -49,7 +56,11 @@ async def create_movie_in_db(
         "stars": stars,
         "directors": directors,
     }
-    response = await async_client.post(f"{BASE_URL}movies/", json=payload)
+    response = await async_client.post(
+        f"{BASE_URL}movies/",
+        json=payload,
+        headers={"Authorization": "Bearer fake-token"},
+    )
     return response
 
 
@@ -233,124 +244,6 @@ async def test_search_movies_by_name_or_description(
         "With searching by the search query - '?search_by_name_or_description=joker' "
         "should be found 1 movie with name 'The Dark Knight 3'"
     )
-
-
-@pytest.mark.asyncio
-async def test_create_movie_success(db_session, seed_movie_certification):
-    """
-    Test case for successfully creating a movie.
-    This test ensures that when a new movie is created:
-    - The provided data is correctly stored in the database.
-    - New genres, stars, and directors are added to their respective tables if they do not already exist.
-
-    Test Steps:
-    1. Verify that the `GenreModel`, `StarModel`, and `DirectorModel` tables are initially empty.
-    2. Send a POST request to create a new movie with associated genres, stars, and directors.
-    3. Confirm that the API returns a `201` status code along with a success message.
-    4. Query the database to validate that:
-       - The movie record has been created in `MovieModel`.
-       - The specified genres, stars, and directors have been added to their respective tables.
-
-    Expected Outcome:
-    - The movie is successfully created with all input data.
-    - New genres, stars, and directors are added if they were not previously present in the database.
-    """
-    genres_stmt = select(GenreModel)
-    result = await db_session.execute(genres_stmt)
-    db_genres = result.scalars().all()
-    assert (
-        db_genres == []
-    ), "The genre table should be empty before the request of movie creation"
-
-    stars_stmt = select(StarModel)
-    result = await db_session.execute(stars_stmt)
-    db_stars = result.scalars().all()
-    assert (
-        db_stars == []
-    ), "The stars table should be empty before the request of movie creation"
-
-    directors_stmt = select(DirectorModel)
-    result = await db_session.execute(directors_stmt)
-    db_directors = result.scalars().all()
-    assert (
-        db_directors == []
-    ), "The directors table should be empty before the request of movie creation"
-
-    response = await create_movie_in_db()
-    response_data = response.json()
-    assert response.status_code == 201
-    assert response_data["message"] == "Movie was created successfully!"
-
-    movie_stmt = select(MovieModel).where(MovieModel.id == 1)
-    result = await db_session.execute(movie_stmt)
-    db_movie = result.scalars().first()
-    assert db_movie.name == "The TestMovie"
-
-    genres_stmt = select(GenreModel)
-    result = await db_session.execute(genres_stmt)
-    db_genres = result.scalars().all()
-    assert (
-        len(db_genres) == 2
-    ), "All genres should be add to genre's table after movie creation"
-    assert db_genres[0].name == "Crime", (
-        "The genre should be create in the genre's table after movie creation, "
-        "if it did not exist"
-    )
-
-    stars_stmt = select(StarModel)
-    result = await db_session.execute(stars_stmt)
-    db_stars = result.scalars().all()
-    assert (
-        len(db_stars) == 2
-    ), "All stars should be add to star's table after movie creation"
-    assert db_stars[0].name == "John Doe", (
-        "The star should be create in star's table after movie creation, "
-        "if it did not exist"
-    )
-
-    directors_stmt = select(DirectorModel)
-    result = await db_session.execute(directors_stmt)
-    db_directors = result.scalars().all()
-    assert (
-        len(db_directors) == 1
-    ), "All directors should be add to director's table after movie creation"
-    assert db_directors[0].name == "Christopher Nolan", (
-        "The director should be create in director's table after movie creation, "
-        "if it did not exist"
-    )
-
-
-@pytest.mark.asyncio
-async def test_create_duplicate_movie(db_session, seed_movie_certification):
-    response_first_movie = await create_movie_in_db()
-    response_data = response_first_movie.json()
-    assert response_first_movie.status_code == 201
-    assert response_data["message"] == "Movie was created successfully!"
-
-    response_duplicate_movie = await create_movie_in_db()
-    response_data = response_duplicate_movie.json()
-    assert response_duplicate_movie.status_code == 409
-    assert response_data["detail"] == (
-        "The movie 'The TestMovie' (2008), "
-        "with a duration of 150 minutes, already exists in the database."
-    )
-
-
-@pytest.mark.asyncio
-async def test_create_movie_no_certificate(db_session):
-    """
-    Test case for creating a movie if certificate id does not exist in the DB.
-    """
-    certification_stmt = select(CertificationModel).where(CertificationModel.id == 100)
-    result = await db_session.execute(certification_stmt)
-    not_existing_certification = result.scalars().first()
-
-    assert not_existing_certification is None
-
-    response = await create_movie_in_db()
-    response_data = response.json()
-    assert response.status_code == 400
-    assert response_data["detail"] == "Incorrect certification id"
 
 
 @pytest.mark.asyncio
@@ -550,3 +443,263 @@ async def test_get_all_comments_of_user(
         comments_of_test_user[2].comment
         == "The third comment of test_user to The Test Movie 1"
     )
+
+
+# CRUD movies endpoint
+@pytest.mark.asyncio
+async def test_create_movie_success(db_session, seed_movie_certification):
+    """
+    Test case for successfully creating a movie.
+    This test ensures that when a new movie is created:
+    - The provided data is correctly stored in the database.
+    - New genres, stars, and directors are added to their respective tables if they do not already exist.
+
+    Test Steps:
+    1. Verify that the `GenreModel`, `StarModel`, and `DirectorModel` tables are initially empty.
+    2. Create user with MODERATOR rights.
+    3. Send a POST request to create a new movie with associated genres, stars, and directors.
+    4. Confirm that the API returns a `201` status code along with a success message.
+    5. Query the database to validate that:
+       - The movie record has been created in `MovieModel`.
+       - The specified genres, stars, and directors have been added to their respective tables.
+
+    Expected Outcome:
+    - The movie is successfully created with all input data.
+    - New genres, stars, and directors are added if they were not previously present in the database.
+    """
+    genres_stmt = select(GenreModel)
+    result = await db_session.execute(genres_stmt)
+    db_genres = result.scalars().all()
+    assert (
+        db_genres == []
+    ), "The genre table should be empty before the request of movie creation"
+
+    stars_stmt = select(StarModel)
+    result = await db_session.execute(stars_stmt)
+    db_stars = result.scalars().all()
+    assert (
+        db_stars == []
+    ), "The stars table should be empty before the request of movie creation"
+
+    directors_stmt = select(DirectorModel)
+    result = await db_session.execute(directors_stmt)
+    db_directors = result.scalars().all()
+    assert (
+        db_directors == []
+    ), "The directors table should be empty before the request of movie creation"
+
+    response = await create_movie_in_db()
+    response_data = response.json()
+    assert response.status_code == 201
+    assert response_data["message"] == "Movie was created successfully!"
+
+    movie_stmt = select(MovieModel).where(MovieModel.id == 1)
+    result = await db_session.execute(movie_stmt)
+    db_movie = result.scalars().first()
+    assert db_movie.name == "The TestMovie"
+
+    genres_stmt = select(GenreModel)
+    result = await db_session.execute(genres_stmt)
+    db_genres = result.scalars().all()
+    assert (
+        len(db_genres) == 2
+    ), "All genres should be add to genre's table after movie creation"
+    assert db_genres[0].name == "Crime", (
+        "The genre should be create in the genre's table after movie creation, "
+        "if it did not exist"
+    )
+
+    stars_stmt = select(StarModel)
+    result = await db_session.execute(stars_stmt)
+    db_stars = result.scalars().all()
+    assert (
+        len(db_stars) == 2
+    ), "All stars should be add to star's table after movie creation"
+    assert db_stars[0].name == "John Doe", (
+        "The star should be create in star's table after movie creation, "
+        "if it did not exist"
+    )
+
+    directors_stmt = select(DirectorModel)
+    result = await db_session.execute(directors_stmt)
+    db_directors = result.scalars().all()
+    assert (
+        len(db_directors) == 1
+    ), "All directors should be add to director's table after movie creation"
+    assert db_directors[0].name == "Christopher Nolan", (
+        "The director should be create in director's table after movie creation, "
+        "if it did not exist"
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_duplicate_movie(db_session, seed_movie_certification):
+    response_first_movie = await create_movie_in_db()
+    response_data = response_first_movie.json()
+    assert response_first_movie.status_code == 201
+    assert response_data["message"] == "Movie was created successfully!"
+
+    response_duplicate_movie = await create_movie_in_db()
+    response_data = response_duplicate_movie.json()
+    assert response_duplicate_movie.status_code == 409
+    assert response_data["detail"] == (
+        "The movie 'The TestMovie' (2008), "
+        "with a duration of 150 minutes, already exists in the database."
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_movie_no_certificate(db_session):
+    """
+    Test case for creating a movie if certificate id does not exist in the DB.
+    """
+    certification_stmt = select(CertificationModel).where(CertificationModel.id == 100)
+    result = await db_session.execute(certification_stmt)
+    not_existing_certification = result.scalars().first()
+
+    assert not_existing_certification is None
+
+    response = await create_movie_in_db()
+    response_data = response.json()
+    assert response.status_code == 400
+    assert response_data["detail"] == "Incorrect certification id"
+
+
+@pytest.mark.asyncio
+async def test_update_movie_by_moderator(db_session, seed_movies):
+    """
+    Test that a moderator can edit successfully a movie's data.
+    Steps:
+        - override require_moderator function
+        - send PUT request to /movies/3/ endpoint to update name of star from 'Movie-2' to 'New Movie Name'
+    """
+    app.dependency_overrides[require_moderator] = override_require_moderator
+
+    payload_update_movie_data = {
+        "id": 3,
+        "name": "New Movie Name",
+        "year": 1999,
+        "time": 189,
+        "imdb": 4.7,
+        "votes": 1600,
+        "meta_score": 50000,
+        "gross": 800000,
+        "description": "updated description",
+        "price": 122.7,
+        "certification_id": 1,
+    }
+    response_update = await async_client.put(
+        url=f"{BASE_URL}movies/update/3/",
+        json=payload_update_movie_data,
+        headers={"Authorization": "Bearer fake-token"},
+    )
+    assert response_update.json()["name"] == "New Movie Name"
+    assert response_update.status_code == 200
+
+    stmt_updated = select(MovieModel).where(MovieModel.id == 3)
+    result = await db_session.execute(stmt_updated)
+    updated_movie = result.scalars().first()
+    assert updated_movie is not None, "Movie with ID 3 should exists"
+    assert updated_movie.imdb == 4.7
+    assert (
+        updated_movie.name == "New Movie Name"
+    ), "The movie's name in DB should be changed from 'TestMovie - 3' to 'New Movie Name'"
+
+
+@pytest.mark.asyncio
+async def test_delete_movie_by_moderator(db_session, seed_movies):
+    """
+    Test that a moderator can delete a movie.
+    """
+    app.dependency_overrides[require_moderator] = override_require_moderator
+
+    response = await async_client.delete(
+        url=f"{BASE_URL}movies/delete/5/",
+        headers={"Authorization": "Bearer fake-token"},
+    )
+    assert response.json()["message"] == "Film was deleted!"
+    assert response.status_code == 200, "Response status is  - 200 OK"
+
+    stmt = select(MovieModel).where(MovieModel.name == "TestMovie - 5")
+    result = await db_session.execute(stmt)
+    db_movie = result.scalars().first()
+    assert db_movie is None, "Movie with name 'TestMovie - 5' should not exist in DB."
+
+
+@pytest.mark.asyncio
+async def test_create_movie_by_not_moderator_access_forbidden_error(db_session):
+    """
+    Test that a user can not create a new movie, moderator only.
+    Raises an error - 'Access forbidden: moderator only'.
+    """
+    # Step 2: Override the dependency
+    app.dependency_overrides[require_moderator] = (
+        override_require_moderator_with_exception
+    )
+
+    # Step 3: Send POST request
+    payload = {"name": "Test Movie"}
+    response = await async_client.post(
+        url=f"{BASE_URL}movies/",
+        json=payload,
+        headers={"Authorization": "Bearer fake-token"},
+    )
+    assert response.json()["detail"] == "Access forbidden: moderator only"
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_update_movie_by_not_moderator_access_forbidden_error(
+    db_session, seed_movies
+):
+    """
+    Test that a user can not edit a movie.
+    Raises an error - 'Access forbidden: moderator only'.
+    """
+    app.dependency_overrides[require_moderator] = (
+        override_require_moderator_with_exception
+    )
+
+    payload = {"name": "Updated Movie's name"}
+    response = await async_client.put(
+        url=f"{BASE_URL}movies/update/3/",
+        json=payload,
+        headers={"Authorization": "Bearer fake-token"},
+    )
+    assert response.json()["detail"] == "Access forbidden: moderator only"
+    assert response.status_code == 403, "The response status should be - 403 FORBIDDEN"
+
+    stmt = select(MovieModel).where(MovieModel.id == 3)
+    result = await db_session.execute(stmt)
+    db_movie = result.scalars().first()
+    assert (
+        db_movie.name != "Updated Movie's name"
+    ), "The movie's name has not been changed in DB"
+    assert db_movie.name == "TestMovie - 3", "The movie's name in DB - 'TestMovie - 3'"
+
+
+@pytest.mark.asyncio
+async def test_delete_movie_by_not_moderator_access_forbidden_error(
+    db_session, seed_movies
+):
+    """
+    Test that a user can not delete a movie.
+    Raises an error - 'Access forbidden: moderator only'.
+    """
+    app.dependency_overrides[require_moderator] = (
+        override_require_moderator_with_exception
+    )
+
+    response = await async_client.delete(
+        url=f"{BASE_URL}movies/delete/1/",
+        headers={"Authorization": "Bearer fake-token"},
+    )
+    assert (
+        response.json()["detail"] == "Access forbidden: moderator only"
+    ), "Should an error raises - 'Access forbidden: moderator only'"
+    assert response.status_code == 403, "The response status should be - 403 FORBIDDEN"
+
+    stmt = select(MovieModel).where(MovieModel.id == 1)
+    result = await db_session.execute(stmt)
+    db_movie = result.scalars().first()
+    assert db_movie is not None, "The movie should still exists in DB"

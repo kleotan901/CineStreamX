@@ -9,6 +9,10 @@ from config.dependencies import require_moderator
 from database import UserModel, UserGroupModel, UserGroupEnum
 from database.models.movies import GenreModel, StarModel
 from main import app
+from tests.helper import (
+    override_require_moderator,
+    override_require_moderator_with_exception,
+)
 from tests.test_movies import create_movie_in_db
 
 logging.basicConfig(level=logging.DEBUG)
@@ -18,23 +22,8 @@ BASE_URL = "http://127.0.0.1:8000/api/v1/theater/"
 async_client = AsyncClient(transport=ASGITransport(app=app), base_url=BASE_URL)
 
 
-# Override require_moderator dependency to create Fake moderator
-async def override_require_moderator():
-    return UserGroupModel(id=1, name=UserGroupEnum.MODERATOR)
-
-
-# Override require_moderator dependency that raises the exception
-async def override_require_moderator_with_exception():
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="Access forbidden: moderator only",
-    )
-
-
 @pytest.mark.asyncio
-async def test_get_stars_list(
-    db_session, seed_stars
-):
+async def test_get_stars_list(db_session, seed_stars):
     """
     Test retrieving a list of stars.
     Steps:
@@ -47,7 +36,9 @@ async def test_get_stars_list(
     assert response.status_code == 200, "Should be response status code - 200 OK"
     response_data = response.json()
 
-    assert len(response_data["stars"]) == 10, "Should be 10 records in the 'stars' table in DB"
+    assert (
+        len(response_data["stars"]) == 10
+    ), "Should be 10 records in the 'stars' table in DB"
 
 
 # Test CRUD stars endpoints
@@ -60,7 +51,9 @@ async def test_create_star_by_unauthorized_user_not_authenticated_error(db_sessi
     payload = {"name": "John Smith"}
     response = await async_client.post(url=f"{BASE_URL}stars/", json=payload)
     assert response.json()["detail"] == "Not authenticated"
-    assert response.status_code == 401 ,"Should be response status - 401 NOT AUTHENTICATED"
+    assert (
+        response.status_code == 401
+    ), "Should be response status - 401 NOT AUTHENTICATED"
 
 
 @pytest.mark.asyncio
@@ -96,7 +89,6 @@ async def test_create_star_by_moderator(db_session):
     db_genre = result.scalars().first()
     assert db_genre.name == "John Smith"
 
-
     payload = {"name": "John Smith"}
     response = await async_client.post(
         url=f"{BASE_URL}stars/",
@@ -105,7 +97,10 @@ async def test_create_star_by_moderator(db_session):
     )
 
     assert response.status_code == 409
-    assert response.json()["detail"] == "The star with name - 'John Smith' already exists in DB."
+    assert (
+        response.json()["detail"]
+        == "The star with name - 'John Smith' already exists in DB."
+    )
 
 
 @pytest.mark.asyncio
@@ -118,10 +113,10 @@ async def test_update_star_by_moderator(db_session, seed_stars):
     """
     app.dependency_overrides[require_moderator] = override_require_moderator
 
-    payload_update_genre = {"name": "John Smith"}
+    payload_update_star = {"name": "John Smith"}
     response_update = await async_client.put(
         url=f"{BASE_URL}stars/3/",
-        json=payload_update_genre,
+        json=payload_update_star,
         headers={"Authorization": "Bearer fake-token"},
     )
     assert response_update.json()["name"] == "John Smith"
@@ -131,7 +126,9 @@ async def test_update_star_by_moderator(db_session, seed_stars):
     result = await db_session.execute(stmt_updated)
     updated_star = result.scalars().first()
     assert updated_star is not None, "Actor with ID 3 should exists"
-    assert updated_star.name == "John Smith", "The actor's name in DB should be changed from 'Actor-2' to 'John Smith'"
+    assert (
+        updated_star.name == "John Smith"
+    ), "The actor's name in DB should be changed from 'Actor-2' to 'John Smith'"
 
 
 @pytest.mark.asyncio

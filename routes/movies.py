@@ -236,7 +236,9 @@ async def get_movies_by_genre(
     },
 )
 async def create_movie(
-    movies_data: MovieCreateSchema, db: AsyncSession = Depends(get_db)
+    movies_data: MovieCreateSchema,
+    current_user: UserGroupModel = Depends(require_moderator),
+    db: AsyncSession = Depends(get_db),
 ) -> MessageSchema:
     existing_movie = await get_existing_movie(movies_data, db)
     if existing_movie:
@@ -447,7 +449,10 @@ async def movie_detail(
     status_code=status.HTTP_200_OK,
 )
 async def edit_movie(
-    movie_id: int, movie_data: MovieUpdateSchema, db: AsyncSession = Depends(get_db)
+    movie_id: int,
+    movie_data: MovieUpdateSchema,
+    current_user: UserGroupModel = Depends(require_moderator),
+    db: AsyncSession = Depends(get_db),
 ) -> MovieDetailSchema:
     updated_film = await update_movie_by_id(movie_id, movie_data, db)
     return MovieDetailSchema.model_validate(updated_film)
@@ -461,7 +466,9 @@ async def edit_movie(
     status_code=status.HTTP_200_OK,
 )
 async def remove_movie(
-    movie_id: int, db: AsyncSession = Depends(get_db)
+    movie_id: int,
+    current_user: UserGroupModel = Depends(require_moderator),
+    db: AsyncSession = Depends(get_db),
 ) -> MessageSchema:
     await delete_movie_by_id(movie_id, db)
     return MessageSchema.model_validate({"message": "Film was deleted!"})

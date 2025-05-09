@@ -148,22 +148,21 @@ async def update_movie_by_id(movie_id, movies_data, db):
         try:
             if movies_data.genres:
                 genres = await get_or_create_item(movies_data.genres, GenreModel, db)
+                db_film.genres = genres
             if movies_data.stars:
                 stars = await get_or_create_item(movies_data.stars, StarModel, db)
+                db_film.stars = stars
             if movies_data.directors:
                 directors = await get_or_create_item(
                     movies_data.directors, DirectorModel, db
                 )
+                db_film.directors = directors
         except Exception as error:
             await db.rollback()
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"An error occurred during genres, stars or directors updating. {str(error)}",
             )
-
-        db_film.genres = genres
-        db_film.stars = stars
-        db_film.directors = directors
 
         await db.commit()
         await db.refresh(db_film)
