@@ -269,7 +269,7 @@ async def add_genre(genre_data, db):
             status_code=status.HTTP_409_CONFLICT,
             detail=f"The genre '{genre_data.name}' already exist in DB.",
         )
-    db.refresh(new_genre)
+    await db.refresh(new_genre)
     return new_genre
 
 
@@ -284,7 +284,7 @@ async def update_genre_by_id(genre_id, genre_data, db):
             status_code=status.HTTP_409_CONFLICT,
             detail=f"The genre '{genre_data.name}' already exist in DB.",
         )
-    db.refresh(db_genre)
+    await db.refresh(db_genre)
     return db_genre
 
 
@@ -302,6 +302,18 @@ async def delete_genre_by_id(genre_id, db):
     return db_genre
 
 
+async def get_star_by_id(star_id, db):
+    stmt = select(StarModel).where(StarModel.id == star_id)
+    result = await db.execute(stmt)
+    db_star = result.scalars().first()
+    if not db_star:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"The star with this ID not found",
+        )
+    return db_star
+
+
 async def add_star(star_data, db):
     try:
         new_star = StarModel(name=star_data.name)
@@ -313,14 +325,12 @@ async def add_star(star_data, db):
             status_code=status.HTTP_409_CONFLICT,
             detail=f"The star with name - '{star_data.name}' already exists in DB.",
         )
-    db.refresh(new_star)
+    await db.refresh(new_star)
     return new_star
 
 
 async def update_star_by_id(star_id, star_data, db):
-    stmt = select(StarModel).where(StarModel.id == star_id)
-    result = await db.execute(stmt)
-    db_star = result.scalars().first()
+    db_star = await get_star_by_id(star_id, db)
     try:
         db_star.name = star_data.name
         await db.commit()
@@ -330,14 +340,12 @@ async def update_star_by_id(star_id, star_data, db):
             status_code=status.HTTP_409_CONFLICT,
             detail=f"The star with name - '{star_data.name}' already exists in DB.",
         )
-    db.refresh(db_star)
+    await db.refresh(db_star)
     return db_star
 
 
 async def delete_star_by_id(star_id, db):
-    stmt = select(StarModel).where(StarModel.id == star_id)
-    result = await db.execute(stmt)
-    db_star = result.scalars().first()
+    db_star = await get_star_by_id(star_id, db)
     try:
         await db.delete(db_star)
         await db.commit()

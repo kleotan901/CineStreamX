@@ -7,7 +7,7 @@ from sqlalchemy import select, func, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from config.dependencies import get_user_id_from_headers
+from config.dependencies import get_user_id_from_headers, require_moderator
 from crud import (
     get_movie_by_id,
     get_existing_movie,
@@ -24,7 +24,7 @@ from crud import (
 )
 from crud.movies import update_genre_by_id, delete_star_by_id
 
-from database import get_db
+from database import get_db, UserGroupModel
 from database.models.movies import (
     MovieModel,
     MovieLikeModel,
@@ -612,6 +612,7 @@ async def get_genres_with_movie_count(
 )
 async def create_genre(
     genre_data: GenreCreateSchema,
+    current_user: UserGroupModel = Depends(require_moderator),
     db: AsyncSession = Depends(get_db),
 ) -> GenreSchema:
     genre = await add_genre(genre_data, db)
@@ -628,6 +629,7 @@ async def create_genre(
 async def edit_genre(
     genre_id: int,
     genre_data: GenreCreateSchema,
+    current_user: UserGroupModel = Depends(require_moderator),
     db: AsyncSession = Depends(get_db),
 ) -> GenreSchema:
     genre = await update_genre_by_id(genre_id, genre_data, db)
@@ -643,6 +645,7 @@ async def edit_genre(
 )
 async def remove_genre(
     genre_id: int,
+    current_user: UserGroupModel = Depends(require_moderator),
     db: AsyncSession = Depends(get_db),
 ) -> MessageSchema:
     genre = await delete_genre_by_id(genre_id, db)
@@ -680,6 +683,7 @@ async def get_stars_list(
 )
 async def create_star(
     star_data: StarCreateSchema,
+    current_user: UserGroupModel = Depends(require_moderator),
     db: AsyncSession = Depends(get_db),
 ) -> StarSchema:
     star = await add_star(star_data, db)
@@ -696,6 +700,7 @@ async def create_star(
 async def edit_star(
     star_id: int,
     star_data: StarCreateSchema,
+    current_user: UserGroupModel = Depends(require_moderator),
     db: AsyncSession = Depends(get_db),
 ) -> StarSchema:
     star = await update_star_by_id(star_id, star_data, db)
@@ -711,6 +716,7 @@ async def edit_star(
 )
 async def remove_star(
     star_id: int,
+    current_user: UserGroupModel = Depends(require_moderator),
     db: AsyncSession = Depends(get_db),
 ) -> MessageSchema:
     star = await delete_star_by_id(star_id, db)

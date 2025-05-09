@@ -175,9 +175,9 @@ async def require_moderator(
     result = await db.execute(stmt)
     group = result.scalars().first()
     if not group:
-        raise HTTPException(status_code=403, detail="Access forbidden: moderator or admin only")
+        raise HTTPException(status_code=403, detail="Access forbidden: moderator only")
     if group.name != UserGroupEnum.MODERATOR:
-        raise HTTPException(status_code=403, detail="Access forbidden: moderator or admin only")
+        raise HTTPException(status_code=403, detail="Access forbidden: moderator only")
 
     return group
 
